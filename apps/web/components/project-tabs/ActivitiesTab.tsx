@@ -1,0 +1,539 @@
+'use client';
+
+import { useState, useEffect } from "react";
+import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { ListTodo, BarChart3, Plus, Download, MessageSquare, ExternalLink, MoreVertical, Pencil, Trash, Search } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { ActivityDetailsDialog } from "./ActivityDetailsDialog";
+import GanttChart from "./GanttChart";
+
+
+type Activity = {
+    activity_id: number;
+    project_id: number;
+    activity_name: string;
+    start_date: string;
+    end_date: string;
+    tag: string;
+    owner: string;
+    progress: number;
+    status: string;
+};
+
+const MASTER_ACTIVITIES = [
+    { name: "Snags", tag: "Site Work" },
+    { name: "Plumbing Drawing", tag: "Design" },
+    { name: "Flooring", tag: "Civil" },
+    { name: "Electrical Cabling", tag: "MEP" },
+    { name: "Brickwork", tag: "Civil" },
+    { name: "Plastering", tag: "Civil" },
+    { name: "Painting", tag: "Finishing" },
+    { name: "HVAC Installation", tag: "MEP" },
+    { name: "Fire Fighting Sys", tag: "MEP" },
+    { name: "False Ceiling", tag: "Finishing" },
+    { name: "Carpentry", tag: "Finishing" },
+    { name: "Waterproofing", tag: "Civil" },
+    { name: "Demolition", tag: "Site Work" },
+    { name: "Site Clearance", tag: "Site Work" },
+    { name: "Excavation", tag: "Civil" },
+    { name: "Foundation", tag: "Civil" },
+    { name: "Structural Steel", tag: "Civil" },
+    { name: "Glass Work", tag: "Finishing" },
+    { name: "Landscaping", tag: "Site Work" },
+    { name: "Sewerage Line", tag: "Plumbing" },
+];
+
+export default function ActivitiesTab({ projectId }: { projectId: string }) {
+    const [activities, setActivities] = useState<Activity[]>([]);
+    const [isActivityOpen, setIsActivityOpen] = useState(false);
+    const [isSaving, setIsSaving] = useState(false);
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const [currentUser, setCurrentUser] = useState("Unknown");
+
+    // NEW: View Toggle State
+    const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
+
+    useEffect(() => {
+        const fetchUser = async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                const name = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || "User";
+                setCurrentUser(name);
+                setNewActivity(prev => ({ ...prev, owner: name }));
+            }
+        };
+        fetchUser();
+    }, []);
+
+    const [newActivity, setNewActivity] = useState({
+        activity_name: '',
+        start_date: '',
+        end_date: '',
+        tag: 'Site Work',
+        owner: currentUser
+    });
+
+    // Search & Multi-select States
+    const [searchTerm, setSearchTerm] = useState("");
+    const [selectedActivities, setSelectedActivities] = useState<string[]>([]); // For Bulk Add
+
+    // Activity Details & History Modal State
+    const [selectedActivityForDetails, setSelectedActivityForDetails] = useState<Activity | null>(null);
+    const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+
+    const formatDate = (dateString: string) => {
+        if (!dateString) return "";
+        const date = new Date(dateString);
+        return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    };
+
+    const fetchActivities = async () => {
+        const { data: activitiesData, error } = await supabase
+            .from('site_activities')
+            .select('*')
+            .eq('project_id', projectId)
+            .order('start_date', { ascending: true });
+
+        if (activitiesData) {
+            setActivities(activitiesData);
+
+            // Sync selectedActivityForDetails if it's open
+            if (selectedActivityForDetails) {
+                const updatedFn = activitiesData.find(a => a.activity_id === selectedActivityForDetails.activity_id);
+                if (updatedFn) {
+                    setSelectedActivityForDetails(updatedFn);
+                }
+            }
+        } else if (error) {
+            console.error("Error fetching activities:", error);
+        }
+    };
+
+    useEffect(() => {
+        if (projectId) {
+            fetchActivities();
+        }
+    }, [projectId]);
+
+    const handleEditActivity = (activity: Activity) => {
+        setEditingId(activity.activity_id);
+        const startDate = activity.start_date ? new Date(activity.start_date).toISOString().split('T')[0] : '';
+        const endDate = activity.end_date ? new Date(activity.end_date).toISOString().split('T')[0] : '';
+
+        setNewActivity({
+            activity_name: activity.activity_name,
+            start_date: startDate,
+            end_date: endDate,
+            tag: activity.tag,
+            owner: activity.owner
+        });
+        setIsActivityOpen(true);
+    };
+
+    const handleSaveActivity = async () => {
+        setIsSaving(true);
+
+        let error;
+
+        if (editingId) {
+            // Update Existing Activity
+            const payload = {
+                project_id: Number(projectId),
+                activity_name: newActivity.activity_name,
+                start_date: newActivity.start_date,
+                end_date: newActivity.end_date,
+                tag: newActivity.tag,
+                owner: newActivity.owner,
+            };
+
+            const { error: updateError } = await supabase
+                .from('site_activities')
+                .update(payload)
+                .eq('activity_id', editingId);
+            error = updateError;
+
+        } else {
+            // Bulk Insert New Activities
+            if (selectedActivities.length === 0) {
+                toast.error("Please select at least one activity.");
+                setIsSaving(false);
+                return;
+            }
+
+            const today = new Date();
+            const nextWeek = new Date();
+            nextWeek.setDate(today.getDate() + 7);
+
+            const bulkPayload = selectedActivities.map(activityName => {
+                const masterItem = MASTER_ACTIVITIES.find(m => m.name === activityName);
+                return {
+                    project_id: Number(projectId),
+                    activity_name: activityName,
+                    start_date: today.toISOString().split('T')[0],
+                    end_date: nextWeek.toISOString().split('T')[0],
+                    tag: masterItem?.tag || 'Site Work',
+                    owner: currentUser,
+                    progress: 0,
+                    status: 'Pending'
+                };
+            });
+
+            const { error: insertError } = await supabase
+                .from('site_activities')
+                .insert(bulkPayload);
+            error = insertError;
+        }
+
+        if (!error) {
+            toast.success(editingId ? "Activity updated successfully." : "Activities added successfully.");
+            setIsActivityOpen(false);
+            setEditingId(null);
+            setNewActivity({
+                activity_name: '',
+                start_date: '',
+                end_date: '',
+                tag: 'Site Work',
+                owner: currentUser
+            });
+            setSelectedActivities([]);
+            setSearchTerm("");
+            fetchActivities();
+        } else {
+            console.error("Error saving activity:", error);
+            toast.error(`Failed to save: ${error.message || "Unknown error"}`);
+        }
+        setIsSaving(false);
+    };
+
+    const toggleActivitySelection = (name: string) => {
+        if (selectedActivities.includes(name)) {
+            setSelectedActivities(selectedActivities.filter(item => item !== name));
+        } else {
+            setSelectedActivities([...selectedActivities, name]);
+        }
+    };
+
+    const filteredMasterList = MASTER_ACTIVITIES.filter(item =>
+        item.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    const handleDeleteActivity = async (id: number) => {
+        if (!confirm("Are you sure you want to delete this activity?")) return;
+
+        const { error } = await supabase.from('site_activities').delete().eq('activity_id', id);
+
+        if (!error) {
+            toast.success("Activity deleted successfully.");
+            fetchActivities();
+        } else {
+            console.error("Error deleting activity:", error);
+            toast.error("Failed to delete activity.");
+        }
+    };
+
+    return (
+        <Card className="border-none shadow-sm flex flex-col h-[calc(100vh-200px)]">
+            <CardHeader className="pb-4 pt-2">
+                <div className="flex justify-between items-center">
+                    {/* Left: View Toggle */}
+                    <div className="flex bg-slate-100 p-1 rounded-md">
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                                "h-8 px-4 text-xs font-semibold rounded-sm transition-all",
+                                viewMode === 'list'
+                                    ? "bg-white text-slate-800 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-800"
+                            )}
+                            onClick={() => setViewMode('list')}
+                        >
+                            <ListTodo className="h-4 w-4 mr-2" /> Details
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className={cn(
+                                "h-8 px-4 text-xs font-semibold rounded-sm transition-all",
+                                viewMode === 'chart'
+                                    ? "bg-white text-slate-800 shadow-sm"
+                                    : "text-slate-500 hover:text-slate-800"
+                            )}
+                            onClick={() => setViewMode('chart')}
+                        >
+                            <BarChart3 className="h-4 w-4 mr-2" /> Chart
+                        </Button>
+                    </div>
+
+                    {/* Right: Actions */}
+                    <div className="flex space-x-2">
+                        {/* Only show actions in list mode or specific actions in chart mode if needed */}
+                        <Dialog open={isActivityOpen} onOpenChange={(open: boolean) => { setIsActivityOpen(open); if (!open) { setEditingId(null); setNewActivity({ activity_name: '', start_date: '', end_date: '', tag: 'Site Work', owner: currentUser }); setSelectedActivities([]); setSearchTerm(""); } }}>
+                            <DialogTrigger asChild>
+                                <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 h-9" onClick={() => { setEditingId(null); }}>
+                                    <Plus className="h-4 w-4 mr-2" /> Activity
+                                </Button>
+                            </DialogTrigger>
+                            <DialogContent className="max-w-2xl bg-white rounded-xl shadow-2xl border-0">
+                                <DialogHeader>
+                                    <DialogTitle className="text-xl font-bold">{editingId ? 'Edit Activity' : 'Add New Activity'}</DialogTitle>
+                                    <DialogDescription>
+                                        Create a new activity or select from the master list.
+                                    </DialogDescription>
+                                </DialogHeader>
+
+                                {editingId ? (
+                                    // Edit Mode
+                                    <div className="grid gap-4 py-4">
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Name</Label>
+                                            <Input
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.activity_name}
+                                                onChange={(e) => setNewActivity({ ...newActivity, activity_name: e.target.value })}
+                                                placeholder="e.g. Demolition"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Start Date</Label>
+                                            <Input
+                                                type="date"
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.start_date}
+                                                onChange={(e) => setNewActivity({ ...newActivity, start_date: e.target.value })}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">End Date</Label>
+                                            <Input
+                                                type="date"
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.end_date}
+                                                onChange={(e) => setNewActivity({ ...newActivity, end_date: e.target.value })}
+                                            />
+                                        </div>
+                                        {/* Tag and Owner fields omitted for brevity but logic is same as before */}
+                                    </div>
+                                ) : (
+                                    // Bulk Add Mode
+                                    <div className="py-2">
+                                        <div className="relative mb-4">
+                                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+                                            <Input
+                                                placeholder="Search standard activities..."
+                                                className="pl-9 bg-slate-50 border-slate-200"
+                                                value={searchTerm}
+                                                onChange={(e) => setSearchTerm(e.target.value)}
+                                            />
+                                        </div>
+                                        <div className="border rounded-md h-[300px] overflow-y-auto">
+                                            <Table>
+                                                <TableBody>
+                                                    {filteredMasterList.length === 0 ? (
+                                                        <TableRow>
+                                                            <TableCell className="text-center text-slate-500 py-4">No activities found.</TableCell>
+                                                        </TableRow>
+                                                    ) : (
+                                                        filteredMasterList.map((item) => (
+                                                            <TableRow
+                                                                key={item.name}
+                                                                className="cursor-pointer hover:bg-slate-50"
+                                                                onClick={() => toggleActivitySelection(item.name)}
+                                                            >
+                                                                <TableCell className="w-[40px]">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="rounded border-gray-300 accent-blue-600 h-4 w-4"
+                                                                        checked={selectedActivities.includes(item.name)}
+                                                                        readOnly
+                                                                    />
+                                                                </TableCell>
+                                                                <TableCell className="font-medium text-slate-700">{item.name}</TableCell>
+                                                                <TableCell className="text-right">
+                                                                    <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-full">{item.tag}</span>
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        ))
+                                                    )}
+                                                </TableBody>
+                                            </Table>
+                                        </div>
+                                        <p className="text-xs text-slate-500 mt-2 text-right">
+                                            {selectedActivities.length} activities selected
+                                        </p>
+                                    </div>
+                                )}
+                                <DialogFooter>
+                                    <Button onClick={handleSaveActivity} disabled={isSaving} className="bg-blue-600 text-white hover:bg-blue-700">
+                                        {isSaving ? 'Saving...' : (editingId ? 'Update Activity' : `Add ${selectedActivities.length > 0 ? selectedActivities.length : ''} Activities`)}
+                                    </Button>
+                                </DialogFooter>
+                            </DialogContent>
+                        </Dialog>
+
+                        <Button variant="outline" size="sm" className="h-9 border-slate-200 text-slate-600 hover:bg-slate-50">
+                            <Download className="h-4 w-4 mr-2" /> Import from Other Project
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-9 w-9 text-slate-400">
+                            <MoreVertical className="h-4 w-4" />
+                        </Button>
+                    </div>
+                </div>
+
+                {/* Filters Row (Only relevant for List view) */}
+                {viewMode === 'list' && (
+                    <div className="flex items-center space-x-4 mt-4">
+                        <div className="relative flex-1 max-w-sm">
+                            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                            <Input
+                                placeholder="Search activities..."
+                                className="pl-9 h-9 bg-slate-50 border-slate-200"
+                            />
+                        </div>
+                    </div>
+                )}
+            </CardHeader>
+
+            <CardContent className="flex-1 overflow-hidden p-0 relative">
+                {viewMode === 'list' ? (
+                    <div className="h-full overflow-auto px-6 pb-6">
+                        <Table>
+                            <TableHeader className="bg-slate-50 sticky top-0 z-10">
+                                <TableRow className="hover:bg-transparent border-b border-slate-200">
+                                    <TableHead className="w-10">
+                                        <input type="checkbox" className="rounded border-gray-300" />
+                                    </TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Activity</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Start Date</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">End Date</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Tag</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Owner</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Current Status</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Comment</TableHead>
+                                    <TableHead className="text-xs font-semibold uppercase tracking-wider text-gray-500 text-center">Action</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {activities.length === 0 ? (
+                                    <TableRow>
+                                        <TableCell colSpan={9} className="h-24 text-center text-slate-500">
+                                            No activities found. Create one to get started.
+                                        </TableCell>
+                                    </TableRow>
+                                ) : (
+                                    activities.map((activity) => (
+                                        <TableRow key={activity.activity_id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
+                                            <TableCell>
+                                                <input type="checkbox" className="rounded border-gray-300" />
+                                            </TableCell>
+                                            <TableCell className="font-medium text-slate-900">
+                                                {activity.activity_name}
+                                            </TableCell>
+                                            <TableCell className="text-slate-500 text-sm">
+                                                {formatDate(activity.start_date)}
+                                            </TableCell>
+                                            <TableCell className="text-slate-500 text-sm">
+                                                {formatDate(activity.end_date)}
+                                            </TableCell>
+                                            <TableCell>
+                                                <Badge variant="outline" className="bg-white text-slate-600 border-slate-200 font-normal">
+                                                    {activity.tag}
+                                                </Badge>
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="flex items-center gap-2">
+                                                    <Avatar className="h-6 w-6">
+                                                        <AvatarFallback className="bg-indigo-100 text-indigo-600 text-[10px]">
+                                                            {activity.owner?.substring(0, 2).toUpperCase() || "NA"}
+                                                        </AvatarFallback>
+                                                    </Avatar>
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="flex flex-col gap-1.5 w-[140px]">
+                                                    <div className="flex justify-between text-xs">
+                                                        <span className="font-medium text-slate-700">{activity.progress}%</span>
+                                                        <span className={cn(
+                                                            "text-[10px] px-1.5 py-0.5 rounded-full font-medium",
+                                                            activity.status === 'Completed' ? "bg-green-100 text-green-700" :
+                                                                activity.status === 'In Progress' ? "bg-blue-100 text-blue-700" :
+                                                                    "bg-gray-100 text-gray-600"
+                                                        )}>
+                                                            {activity.status}
+                                                        </span>
+                                                    </div>
+                                                    <Progress value={activity.progress} className="h-1.5 bg-slate-100" indicatorClassName={cn(
+                                                        activity.status === 'Completed' ? "bg-green-500" : "bg-blue-500"
+                                                    )} />
+                                                </div>
+                                            </TableCell>
+                                            <TableCell>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-8 px-2 text-slate-500 hover:text-blue-600"
+                                                    onClick={() => { setSelectedActivityForDetails(activity); setIsDetailsOpen(true); }}
+                                                >
+                                                    <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Note
+                                                </Button>
+                                            </TableCell>
+                                            <TableCell>
+                                                <div className="flex items-center justify-center gap-1 opacity-100 text-slate-500">
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-8 px-2 text-slate-600 hover:text-blue-600 hover:bg-blue-50"
+                                                        onClick={() => handleEditActivity(activity)}
+                                                    >
+                                                        <Pencil className="h-3.5 w-3.5 mr-1.5" /> Edit
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-8 px-2 text-slate-600 hover:text-red-600 hover:bg-red-50"
+                                                        onClick={() => handleDeleteActivity(activity.activity_id)}
+                                                    >
+                                                        <Trash className="h-3.5 w-3.5 mr-1.5" /> Delete
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-8 px-2 text-slate-600 hover:text-slate-800"
+                                                        onClick={() => { setSelectedActivityForDetails(activity); setIsDetailsOpen(true); }}
+                                                    >
+                                                        <ExternalLink className="h-3.5 w-3.5 mr-1.5" /> Details
+                                                    </Button>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    ))
+                                )}
+                            </TableBody>
+                        </Table>
+                    </div>
+                ) : (
+                    <GanttChart activities={activities} />
+                )}
+            </CardContent>
+
+            <ActivityDetailsDialog
+                activity={selectedActivityForDetails}
+                isOpen={isDetailsOpen}
+                onClose={() => setIsDetailsOpen(false)}
+                onUpdate={fetchActivities}
+            />
+        </Card>
+    );
+}
