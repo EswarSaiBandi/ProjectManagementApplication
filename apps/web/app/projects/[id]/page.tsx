@@ -11,6 +11,18 @@ import { supabase } from "@/lib/supabase";
 import FinancialTab from "@/components/project-tabs/FinancialTab";
 import ActivitiesTab from "@/components/project-tabs/ActivitiesTab";
 import ClientProgressTab from "@/components/project-tabs/ClientProgressTab";
+import FilesTab from "@/components/project-tabs/FilesTab";
+import MoodboardTab from "@/components/project-tabs/MoodboardTab";
+import NotesTab from "@/components/project-tabs/NotesTab";
+import TasksTab from "@/components/project-tabs/TasksTab";
+import QuotesTab from "@/components/project-tabs/QuotesTab";
+import OrdersTab from "@/components/project-tabs/OrdersTab";
+import InvoicesTab from "@/components/project-tabs/InvoicesTab";
+import PurchaseRequestTab from "@/components/project-tabs/PurchaseRequestTab";
+import InventoryTab from "@/components/project-tabs/InventoryTab";
+import ManpowerTab from "@/components/project-tabs/ManpowerTab";
+import ChecklistsTab from "@/components/project-tabs/ChecklistsTab";
+import DetailsTab from "@/components/project-tabs/DetailsTab";
 
 export default function ProjectDetailsPage({ params }: { params: { id: string } }) {
     const [activeTab, setActiveTab] = useState("financials");
@@ -115,11 +127,43 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                 </div>
 
                 <div className="space-y-6">
+                    {/* Project Modules */}
+                    {activeTab === 'files' && <FilesTab projectId={params.id} />}
+                    {activeTab === 'moodboard' && <MoodboardTab projectId={params.id} />}
+                    {activeTab === 'notes' && <NotesTab projectId={params.id} />}
+                    {activeTab === 'tasks' && <TasksTab projectId={params.id} />}
+                    {activeTab === 'quotes' && <QuotesTab projectId={params.id} />}
+                    {activeTab === 'orders' && <OrdersTab projectId={params.id} />}
+                    {activeTab === 'invoices' && <InvoicesTab projectId={params.id} />}
+                    {activeTab === 'purchase-request' && <PurchaseRequestTab projectId={params.id} />}
+                    {activeTab === 'inventory' && <InventoryTab projectId={params.id} />}
+                    {activeTab === 'manpower' && <ManpowerTab projectId={params.id} />}
+                    {activeTab === 'checklists' && <ChecklistsTab projectId={params.id} />}
+                    {activeTab === 'details' && <DetailsTab projectId={params.id} />}
+
                     {/* Financials Tab Content */}
                     {activeTab === 'financials' && <FinancialTab projectId={params.id} />}
 
                     {/* Placeholder for other tabs (Coming Soon) */}
-                    {tabs.filter(t => t.value !== 'financials' && t.value !== 'activities' && t.value !== 'client-progress').map(tab => (
+                    {tabs.filter(t =>
+                        ![
+                            'files',
+                            'moodboard',
+                            'notes',
+                            'tasks',
+                            'quotes',
+                            'orders',
+                            'invoices',
+                            'purchase-request',
+                            'inventory',
+                            'financials',
+                            'activities',
+                            'client-progress',
+                            'manpower',
+                            'checklists',
+                            'details'
+                        ].includes(t.value)
+                    ).map(tab => (
                         activeTab === tab.value && (
                             <div key={tab.value} className="min-h-[200px] flex items-center justify-center border rounded-lg border-dashed">
                                 <div className="text-center text-muted-foreground">

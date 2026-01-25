@@ -49,6 +49,7 @@ export default function InventoryPage() {
         item_name: '',
         unit: 'units',
         category: 'General',
+        quantity: '0',
     });
 
     useEffect(() => {
@@ -61,7 +62,7 @@ export default function InventoryPage() {
             // Fetch from material_master
             const { data: materials, error: materialsError } = await supabase
                 .from('material_master')
-                .select('material_id, item_name, unit')
+                .select('material_id, item_name, unit, quantity')
                 .order('item_name');
 
             if (materialsError) throw materialsError;
@@ -146,11 +147,13 @@ export default function InventoryPage() {
             // Transform data
             const inventoryItems = (materials || []).map((material: any) => {
                 const qty = quantitiesByMaterial[material.material_id] || { approved: 0, received: 0, pending: 0 };
+                const baseQty = Number(material.quantity);
+                const storedQty = Number.isFinite(baseQty) ? baseQty : 0;
                 return {
                     id: material.material_id,
                     name: material.item_name,
                     unit: material.unit || 'units',
-                    quantity: qty.pending, // Available stock = pending (approved but not yet received)
+                    quantity: storedQty, // Manual stock quantity stored on material_master.quantity
                     received: qty.received,
                     approved: qty.approved,
                     category: material.unit || 'General',
@@ -177,6 +180,7 @@ export default function InventoryPage() {
             item_name: '',
             unit: 'units',
             category: 'General',
+            quantity: '0',
         });
         setIsItemDialogOpen(true);
     };
@@ -187,6 +191,7 @@ export default function InventoryPage() {
             item_name: item.name,
             unit: item.unit,
             category: item.category,
+            quantity: String(item.quantity ?? 0),
         });
         setIsItemDialogOpen(true);
     };
@@ -194,6 +199,12 @@ export default function InventoryPage() {
     const handleSaveItem = async () => {
         if (!itemForm.item_name.trim()) {
             toast.error('Item name is required');
+            return;
+        }
+
+        const parsedQty = Number(itemForm.quantity);
+        if (!Number.isFinite(parsedQty) || parsedQty < 0) {
+            toast.error('Quantity must be a valid non-negative number');
             return;
         }
 
@@ -206,6 +217,7 @@ export default function InventoryPage() {
                     .update({
                         item_name: itemForm.item_name,
                         unit: itemForm.unit,
+                        quantity: parsedQty,
                     })
                     .eq('material_id', editingItem.id);
 
@@ -218,6 +230,7 @@ export default function InventoryPage() {
                     .insert([{
                         item_name: itemForm.item_name,
                         unit: itemForm.unit,
+                        quantity: parsedQty,
                     }]);
 
                 if (error) throw error;
@@ -582,6 +595,17 @@ export default function InventoryPage() {
                                 value={itemForm.item_name}
                                 onChange={(e) => setItemForm({ ...itemForm, item_name: e.target.value })}
                                 placeholder="e.g., Cement, Steel Rods"
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="quantity">Quantity</Label>
+                            <Input
+                                id="quantity"
+                                type="number"
+                                min={0}
+                                value={itemForm.quantity}
+                                onChange={(e) => setItemForm({ ...itemForm, quantity: e.target.value })}
+                                placeholder="0"
                             />
                         </div>
                         <div className="grid grid-cols-2 gap-4">

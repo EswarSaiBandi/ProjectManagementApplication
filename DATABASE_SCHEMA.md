@@ -70,8 +70,49 @@ Master list of materials/items.
 | `material_id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Unique material identifier |
 | `item_name` | TEXT | NOT NULL | Material/item name |
 | `unit` | TEXT | | Unit of measurement (e.g., kg, units, bags) |
+| `quantity` | NUMERIC | DEFAULT 0, NOT NULL | Current stock quantity (manually maintained) |
 
 **Note:** Category is currently derived from `unit` field in frontend, not stored separately.
+
+---
+
+### 5b. **project_manpower** (Project Manpower)
+Tracks manpower allocation per project.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Row identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `role` | TEXT | NOT NULL | Role (e.g., Mason, Carpenter) |
+| `headcount` | INT | DEFAULT 1, NOT NULL | Number of people |
+| `start_date` | DATE | | Start date |
+| `end_date` | DATE | | End date |
+| `rate_per_day` | NUMERIC(12,2) | | Cost per day |
+| `notes` | TEXT | | Notes |
+| `created_at` | TIMESTAMPTZ | DEFAULT NOW(), NOT NULL | Created timestamp |
+| `updated_at` | TIMESTAMPTZ | DEFAULT NOW(), NOT NULL | Updated timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 5c. **project_checklist_items** (Project Checklists)
+Checklist items scoped to a project.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Row identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `title` | TEXT | NOT NULL | Checklist item title |
+| `description` | TEXT | | Optional description |
+| `status` | TEXT | DEFAULT 'Pending', CHECK: 'Pending','In Progress','Done' | State |
+| `due_date` | DATE | | Optional due date |
+| `created_at` | TIMESTAMPTZ | DEFAULT NOW(), NOT NULL | Created timestamp |
+| `updated_at` | TIMESTAMPTZ | DEFAULT NOW(), NOT NULL | Updated timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator |
+
+**RLS Policies:** Enabled with authenticated read/write.
 
 ---
 
@@ -156,6 +197,23 @@ Site activities and schedule events.
 
 ---
 
+### 10b. **activity_logs** (Activity History)
+Audit/history records for site activity updates.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `log_id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Log identifier |
+| `activity_id` | BIGINT | REFERENCES site_activities(activity_id) ON DELETE CASCADE, NOT NULL | Activity |
+| `previous_progress` | INT | | Previous progress |
+| `new_progress` | INT | | New progress |
+| `comment` | TEXT | | Remarks |
+| `user_name` | TEXT | | User display name |
+| `created_at` | TIMESTAMPTZ | DEFAULT NOW() | Created timestamp |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
 ### 11. **client_updates** (Client Progress Updates)
 Client-facing progress updates with images.
 
@@ -173,6 +231,144 @@ Client-facing progress updates with images.
 
 ---
 
+### 12. **project_notes** (Project Notes)
+Free-form notes scoped to a project.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Note identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `title` | TEXT | NOT NULL | Note title |
+| `body` | TEXT | | Note content |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `updated_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Last update timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 13. **project_tasks** (Project Tasks)
+Lightweight task tracking scoped to a project.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Task identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `title` | TEXT | NOT NULL | Task title |
+| `description` | TEXT | | Task description |
+| `status` | TEXT | DEFAULT 'Todo', CHECK: 'Todo','In Progress','Done' | Task status |
+| `priority` | TEXT | DEFAULT 'Medium' | Low / Medium / High |
+| `due_date` | DATE | | Due date |
+| `assignee_name` | TEXT | | Assignee (name/text for now) |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `updated_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Last update timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 14. **project_files** (Project Files - Metadata)
+Metadata for project-related documents stored in Supabase Storage.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | File identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `bucket` | TEXT | DEFAULT 'documents', NOT NULL | Storage bucket |
+| `object_path` | TEXT | NOT NULL | Storage object path |
+| `file_name` | TEXT | NOT NULL | Original file name |
+| `mime_type` | TEXT | | MIME type |
+| `size_bytes` | BIGINT | | Size in bytes |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Uploader user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 15. **project_moodboard_items** (Moodboard)
+Moodboard images stored in Supabase Storage and referenced per project.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Item identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `title` | TEXT | | Optional label/title |
+| `bucket` | TEXT | DEFAULT 'documents', NOT NULL | Storage bucket |
+| `image_path` | TEXT | NOT NULL | Storage object path |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 16. **project_quotes** (Quotes)
+Header-level quotes per project (line items can be added later).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Quote identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `quote_number` | TEXT | | Quote reference number |
+| `vendor_name` | TEXT | | Vendor |
+| `title` | TEXT | | Quote title |
+| `total_amount` | NUMERIC(15,2) | DEFAULT 0 | Total amount |
+| `status` | TEXT | DEFAULT 'Draft' | Draft / Sent / Approved / Rejected |
+| `issued_date` | DATE | | Issued date |
+| `notes` | TEXT | | Notes |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 17. **project_orders** (Orders)
+Header-level orders per project (line items can be added later).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Order identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `order_number` | TEXT | | Order reference number |
+| `vendor_name` | TEXT | | Vendor |
+| `title` | TEXT | | Order title |
+| `total_amount` | NUMERIC(15,2) | DEFAULT 0 | Total amount |
+| `status` | TEXT | DEFAULT 'Draft' | Draft / Placed / Delivered / Cancelled |
+| `order_date` | DATE | | Order date |
+| `notes` | TEXT | | Notes |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
+### 18. **project_invoices** (Invoices)
+Header-level invoices per project (line items can be added later).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `id` | BIGINT | PRIMARY KEY, AUTO INCREMENT | Invoice identifier |
+| `project_id` | BIGINT | REFERENCES projects(project_id) ON DELETE CASCADE, NOT NULL | Associated project |
+| `invoice_number` | TEXT | | Invoice number |
+| `counterparty_name` | TEXT | | Client or vendor |
+| `title` | TEXT | | Invoice title |
+| `total_amount` | NUMERIC(15,2) | DEFAULT 0 | Total amount |
+| `status` | TEXT | DEFAULT 'Draft' | Draft / Sent / Paid / Overdue / Cancelled |
+| `issued_date` | DATE | | Issued date |
+| `due_date` | DATE | | Due date |
+| `notes` | TEXT | | Notes |
+| `created_at` | TIMESTAMP WITH TIME ZONE | DEFAULT NOW() | Creation timestamp |
+| `created_by` | UUID | REFERENCES auth.users(id) | Creator user ID |
+
+**RLS Policies:** Enabled with authenticated read/write.
+
+---
+
 ## Relationships Summary
 
 ```
@@ -187,7 +383,14 @@ projects (project_id)
   ├── purchase_requests (project_id)
   ├── transactions (project_id)
   ├── site_activities (project_id)
-  └── client_updates (project_id)
+  ├── client_updates (project_id)
+  ├── project_notes (project_id)
+  ├── project_tasks (project_id)
+  ├── project_files (project_id)
+  ├── project_moodboard_items (project_id)
+  ├── project_quotes (project_id)
+  ├── project_orders (project_id)
+  └── project_invoices (project_id)
 
 material_master (material_id)
   └── pr_items (material_id)
@@ -207,6 +410,7 @@ activities (activity_id)
 - **audio-logs**: Audio recordings for site updates
 - **documents**: Receipts and transaction documents
 - **receipts**: Receipt storage (configured in setup_receipts_storage.sql)
+  - Used by project modules like **Files** and **Moodboard** in the web app (paths stored in `project_files` / `project_moodboard_items`)
 
 ---
 
@@ -218,7 +422,7 @@ activities (activity_id)
 4. **20250104_add_comments_to_transactions.sql**: Added comments to transactions
 5. **20250105_create_site_activities.sql**: Created site_activities table
 6. **20260120_add_activity_details.sql**: Added description and dependencies to site_activities
-7. **20260120_create_client_updates.sql**: Created client_updates table with RLS
+7. **20260121_create_client_updates.sql**: Created client_updates table with RLS
 
 ---
 

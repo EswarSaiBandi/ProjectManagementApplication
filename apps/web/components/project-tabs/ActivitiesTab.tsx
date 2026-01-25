@@ -24,6 +24,8 @@ type Activity = {
     activity_id: number;
     project_id: number;
     activity_name: string;
+    description?: string | null;
+    dependencies?: string | null;
     start_date: string;
     end_date: string;
     tag: string;
@@ -31,6 +33,8 @@ type Activity = {
     progress: number;
     status: string;
 };
+
+const STATUS_OPTIONS = ["Pending", "In Progress", "Completed"] as const;
 
 const MASTER_ACTIVITIES = [
     { name: "Snags", tag: "Site Work" },
@@ -61,6 +65,8 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
     const [isSaving, setIsSaving] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
     const [currentUser, setCurrentUser] = useState("Unknown");
+    const [teamNames, setTeamNames] = useState<string[]>([]);
+    const [createMode, setCreateMode] = useState<"bulk" | "custom">("bulk");
 
     // NEW: View Toggle State
     const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
@@ -72,22 +78,51 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                 const name = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split('@')[0] || "User";
                 setCurrentUser(name);
                 setNewActivity(prev => ({ ...prev, owner: name }));
+                setBulkOwner(name);
             }
         };
         fetchUser();
     }, []);
 
+    useEffect(() => {
+        const fetchTeamNames = async () => {
+            const { data, error } = await supabase.from('profiles').select('full_name').order('full_name');
+            if (error) {
+                console.error('Profiles fetch error:', error);
+                setTeamNames([]);
+                return;
+            }
+            const names = (data || []).map((r: any) => String(r.full_name || '').trim()).filter(Boolean);
+            setTeamNames(Array.from(new Set(names)));
+        };
+        fetchTeamNames();
+    }, []);
+
     const [newActivity, setNewActivity] = useState({
         activity_name: '',
+        description: '',
+        dependencies: '',
         start_date: '',
         end_date: '',
         tag: 'Site Work',
-        owner: currentUser
+        owner: currentUser,
+        progress: 0,
+        status: 'Pending'
     });
 
     // Search & Multi-select States
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedActivities, setSelectedActivities] = useState<string[]>([]); // For Bulk Add
+    const [bulkStartDate, setBulkStartDate] = useState(() => {
+        const d = new Date();
+        return d.toISOString().split('T')[0];
+    });
+    const [bulkEndDate, setBulkEndDate] = useState(() => {
+        const d = new Date();
+        d.setDate(d.getDate() + 7);
+        return d.toISOString().split('T')[0];
+    });
+    const [bulkOwner, setBulkOwner] = useState(currentUser);
 
     // Activity Details & History Modal State
     const [selectedActivityForDetails, setSelectedActivityForDetails] = useState<Activity | null>(null);
@@ -103,7 +138,7 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
         const { data: activitiesData, error } = await supabase
             .from('site_activities')
             .select('*')
-            .eq('project_id', projectId)
+            .eq('project_id', Number(projectId))
             .order('start_date', { ascending: true });
 
         if (activitiesData) {
@@ -129,33 +164,72 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
 
     const handleEditActivity = (activity: Activity) => {
         setEditingId(activity.activity_id);
+        setCreateMode("custom");
         const startDate = activity.start_date ? new Date(activity.start_date).toISOString().split('T')[0] : '';
         const endDate = activity.end_date ? new Date(activity.end_date).toISOString().split('T')[0] : '';
 
         setNewActivity({
             activity_name: activity.activity_name,
+            description: (activity.description ?? '') as string,
+            dependencies: (activity.dependencies ?? '') as string,
             start_date: startDate,
             end_date: endDate,
             tag: activity.tag,
-            owner: activity.owner
+            owner: activity.owner,
+            progress: Number(activity.progress ?? 0),
+            status: activity.status || 'Pending'
         });
         setIsActivityOpen(true);
     };
 
     const handleSaveActivity = async () => {
+        if (!projectId || !Number.isFinite(Number(projectId))) {
+            toast.error("Invalid project");
+            return;
+        }
+
         setIsSaving(true);
 
         let error;
 
         if (editingId) {
             // Update Existing Activity
+            if (!newActivity.activity_name.trim()) {
+                toast.error("Activity name is required.");
+                setIsSaving(false);
+                return;
+            }
+            if (!newActivity.start_date || !newActivity.end_date) {
+                toast.error("Start date and end date are required.");
+                setIsSaving(false);
+                return;
+            }
+            if (new Date(newActivity.start_date) > new Date(newActivity.end_date)) {
+                toast.error("End date must be on or after start date.");
+                setIsSaving(false);
+                return;
+            }
+            const p = Number(newActivity.progress);
+            if (!Number.isFinite(p) || p < 0 || p > 100) {
+                toast.error("Progress must be between 0 and 100.");
+                setIsSaving(false);
+                return;
+            }
+
+            const computedStatus =
+                p === 100 ? "Completed" : (newActivity.status || (p > 0 ? "In Progress" : "Pending"));
+
             const payload = {
                 project_id: Number(projectId),
                 activity_name: newActivity.activity_name,
+                description: newActivity.description?.trim() ? newActivity.description.trim() : null,
+                dependencies: newActivity.dependencies?.trim() ? newActivity.dependencies.trim() : null,
                 start_date: newActivity.start_date,
                 end_date: newActivity.end_date,
                 tag: newActivity.tag,
                 owner: newActivity.owner,
+                progress: p,
+                status: computedStatus,
             };
 
             const { error: updateError } = await supabase
@@ -165,47 +239,103 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
             error = updateError;
 
         } else {
-            // Bulk Insert New Activities
-            if (selectedActivities.length === 0) {
-                toast.error("Please select at least one activity.");
-                setIsSaving(false);
-                return;
-            }
+            if (createMode === "custom") {
+                // Single Insert (Custom)
+                if (!newActivity.activity_name.trim()) {
+                    toast.error("Activity name is required.");
+                    setIsSaving(false);
+                    return;
+                }
+                if (!newActivity.start_date || !newActivity.end_date) {
+                    toast.error("Start date and end date are required.");
+                    setIsSaving(false);
+                    return;
+                }
+                if (new Date(newActivity.start_date) > new Date(newActivity.end_date)) {
+                    toast.error("End date must be on or after start date.");
+                    setIsSaving(false);
+                    return;
+                }
+                const p = Number(newActivity.progress);
+                if (!Number.isFinite(p) || p < 0 || p > 100) {
+                    toast.error("Progress must be between 0 and 100.");
+                    setIsSaving(false);
+                    return;
+                }
+                const computedStatus =
+                    p === 100 ? "Completed" : (newActivity.status || (p > 0 ? "In Progress" : "Pending"));
 
-            const today = new Date();
-            const nextWeek = new Date();
-            nextWeek.setDate(today.getDate() + 7);
-
-            const bulkPayload = selectedActivities.map(activityName => {
-                const masterItem = MASTER_ACTIVITIES.find(m => m.name === activityName);
-                return {
+                const payload = {
                     project_id: Number(projectId),
-                    activity_name: activityName,
-                    start_date: today.toISOString().split('T')[0],
-                    end_date: nextWeek.toISOString().split('T')[0],
-                    tag: masterItem?.tag || 'Site Work',
-                    owner: currentUser,
-                    progress: 0,
-                    status: 'Pending'
+                    activity_name: newActivity.activity_name,
+                    description: newActivity.description?.trim() ? newActivity.description.trim() : null,
+                    dependencies: newActivity.dependencies?.trim() ? newActivity.dependencies.trim() : null,
+                    start_date: newActivity.start_date,
+                    end_date: newActivity.end_date,
+                    tag: newActivity.tag,
+                    owner: newActivity.owner || currentUser,
+                    progress: p,
+                    status: computedStatus,
                 };
-            });
 
-            const { error: insertError } = await supabase
-                .from('site_activities')
-                .insert(bulkPayload);
-            error = insertError;
+                const { error: insertError } = await supabase
+                    .from('site_activities')
+                    .insert([payload]);
+                error = insertError;
+            } else {
+                // Bulk Insert New Activities
+                if (selectedActivities.length === 0) {
+                    toast.error("Please select at least one activity.");
+                    setIsSaving(false);
+                    return;
+                }
+                if (!bulkStartDate || !bulkEndDate) {
+                    toast.error("Start date and end date are required.");
+                    setIsSaving(false);
+                    return;
+                }
+                if (new Date(bulkStartDate) > new Date(bulkEndDate)) {
+                    toast.error("End date must be on or after start date.");
+                    setIsSaving(false);
+                    return;
+                }
+
+                const bulkPayload = selectedActivities.map(activityName => {
+                    const masterItem = MASTER_ACTIVITIES.find(m => m.name === activityName);
+                    return {
+                        project_id: Number(projectId),
+                        activity_name: activityName,
+                        start_date: bulkStartDate,
+                        end_date: bulkEndDate,
+                        tag: masterItem?.tag || 'Site Work',
+                        owner: bulkOwner || currentUser,
+                        progress: 0,
+                        status: 'Pending'
+                    };
+                });
+
+                const { error: insertError } = await supabase
+                    .from('site_activities')
+                    .insert(bulkPayload);
+                error = insertError;
+            }
         }
 
         if (!error) {
             toast.success(editingId ? "Activity updated successfully." : "Activities added successfully.");
             setIsActivityOpen(false);
             setEditingId(null);
+            setCreateMode("bulk");
             setNewActivity({
                 activity_name: '',
+                description: '',
+                dependencies: '',
                 start_date: '',
                 end_date: '',
                 tag: 'Site Work',
-                owner: currentUser
+                owner: currentUser,
+                progress: 0,
+                status: 'Pending'
             });
             setSelectedActivities([]);
             setSearchTerm("");
@@ -280,7 +410,7 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                     {/* Right: Actions */}
                     <div className="flex space-x-2">
                         {/* Only show actions in list mode or specific actions in chart mode if needed */}
-                        <Dialog open={isActivityOpen} onOpenChange={(open: boolean) => { setIsActivityOpen(open); if (!open) { setEditingId(null); setNewActivity({ activity_name: '', start_date: '', end_date: '', tag: 'Site Work', owner: currentUser }); setSelectedActivities([]); setSearchTerm(""); } }}>
+                        <Dialog open={isActivityOpen} onOpenChange={(open: boolean) => { setIsActivityOpen(open); if (!open) { setEditingId(null); setCreateMode("bulk"); setNewActivity({ activity_name: '', description: '', dependencies: '', start_date: '', end_date: '', tag: 'Site Work', owner: currentUser, progress: 0, status: 'Pending' }); setSelectedActivities([]); setSearchTerm(""); } }}>
                             <DialogTrigger asChild>
                                 <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 h-9" onClick={() => { setEditingId(null); }}>
                                     <Plus className="h-4 w-4 mr-2" /> Activity
@@ -290,9 +420,14 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                                 <DialogHeader>
                                     <DialogTitle className="text-xl font-bold">{editingId ? 'Edit Activity' : 'Add New Activity'}</DialogTitle>
                                     <DialogDescription>
-                                        Create a new activity or select from the master list.
+                                        {editingId ? "Update activity details." : "Create a custom activity or select from the master list."}
                                     </DialogDescription>
                                 </DialogHeader>
+                                <datalist id="team-member-names">
+                                    {teamNames.map((n) => (
+                                        <option key={n} value={n} />
+                                    ))}
+                                </datalist>
 
                                 {editingId ? (
                                     // Edit Mode
@@ -304,6 +439,24 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                                                 value={newActivity.activity_name}
                                                 onChange={(e) => setNewActivity({ ...newActivity, activity_name: e.target.value })}
                                                 placeholder="e.g. Demolition"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Description</Label>
+                                            <Input
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.description}
+                                                onChange={(e) => setNewActivity({ ...newActivity, description: e.target.value })}
+                                                placeholder="Optional"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Dependencies</Label>
+                                            <Input
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.dependencies}
+                                                onChange={(e) => setNewActivity({ ...newActivity, dependencies: e.target.value })}
+                                                placeholder="Optional (comma separated)"
                                             />
                                         </div>
                                         <div className="grid grid-cols-4 items-center gap-4">
@@ -324,60 +477,225 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                                                 onChange={(e) => setNewActivity({ ...newActivity, end_date: e.target.value })}
                                             />
                                         </div>
-                                        {/* Tag and Owner fields omitted for brevity but logic is same as before */}
-                                    </div>
-                                ) : (
-                                    // Bulk Add Mode
-                                    <div className="py-2">
-                                        <div className="relative mb-4">
-                                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Tag</Label>
                                             <Input
-                                                placeholder="Search standard activities..."
-                                                className="pl-9 bg-slate-50 border-slate-200"
-                                                value={searchTerm}
-                                                onChange={(e) => setSearchTerm(e.target.value)}
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.tag}
+                                                onChange={(e) => setNewActivity({ ...newActivity, tag: e.target.value })}
+                                                placeholder="e.g. Civil / MEP"
                                             />
                                         </div>
-                                        <div className="border rounded-md h-[300px] overflow-y-auto">
-                                            <Table>
-                                                <TableBody>
-                                                    {filteredMasterList.length === 0 ? (
-                                                        <TableRow>
-                                                            <TableCell className="text-center text-slate-500 py-4">No activities found.</TableCell>
-                                                        </TableRow>
-                                                    ) : (
-                                                        filteredMasterList.map((item) => (
-                                                            <TableRow
-                                                                key={item.name}
-                                                                className="cursor-pointer hover:bg-slate-50"
-                                                                onClick={() => toggleActivitySelection(item.name)}
-                                                            >
-                                                                <TableCell className="w-[40px]">
-                                                                    <input
-                                                                        type="checkbox"
-                                                                        className="rounded border-gray-300 accent-blue-600 h-4 w-4"
-                                                                        checked={selectedActivities.includes(item.name)}
-                                                                        readOnly
-                                                                    />
-                                                                </TableCell>
-                                                                <TableCell className="font-medium text-slate-700">{item.name}</TableCell>
-                                                                <TableCell className="text-right">
-                                                                    <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-full">{item.tag}</span>
-                                                                </TableCell>
-                                                            </TableRow>
-                                                        ))
-                                                    )}
-                                                </TableBody>
-                                            </Table>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Owner</Label>
+                                            <Input
+                                                list="team-member-names"
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.owner}
+                                                onChange={(e) => setNewActivity({ ...newActivity, owner: e.target.value })}
+                                                placeholder="e.g. Site Supervisor"
+                                            />
                                         </div>
-                                        <p className="text-xs text-slate-500 mt-2 text-right">
-                                            {selectedActivities.length} activities selected
-                                        </p>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Progress</Label>
+                                            <Input
+                                                type="number"
+                                                min={0}
+                                                max={100}
+                                                className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                value={newActivity.progress}
+                                                onChange={(e) => setNewActivity({ ...newActivity, progress: Number(e.target.value) })}
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-4 items-center gap-4">
+                                            <Label className="text-right text-slate-700">Status</Label>
+                                            <Select value={newActivity.status} onValueChange={(v) => setNewActivity({ ...newActivity, status: v })}>
+                                                <SelectTrigger className="col-span-3 bg-white text-slate-900 border-slate-300">
+                                                    <SelectValue placeholder="Select status" />
+                                                </SelectTrigger>
+                                                <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                                                    {STATUS_OPTIONS.map((s) => (
+                                                        <SelectItem key={s} value={s} className="bg-white hover:bg-gray-100">
+                                                            {s}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    // Create Mode (Bulk or Custom)
+                                    <div className="py-2">
+                                        <div className="flex items-center justify-between gap-3 mb-3">
+                                            <div className="text-sm font-medium text-slate-700">Create mode</div>
+                                            <Select value={createMode} onValueChange={(v) => setCreateMode(v as "bulk" | "custom")}>
+                                                <SelectTrigger className="w-[200px] bg-white border border-slate-200">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent className="bg-white border border-slate-200 shadow-lg">
+                                                    <SelectItem value="bulk" className="bg-white hover:bg-slate-50">
+                                                        Bulk add (master list)
+                                                    </SelectItem>
+                                                    <SelectItem value="custom" className="bg-white hover:bg-slate-50">
+                                                        Custom activity
+                                                    </SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {createMode === "custom" ? (
+                                            <div className="grid gap-4 py-2">
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">Name</Label>
+                                                    <Input
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.activity_name}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, activity_name: e.target.value })}
+                                                        placeholder="e.g. Plumbing Drawing"
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">Description</Label>
+                                                    <Input
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.description}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, description: e.target.value })}
+                                                        placeholder="Optional"
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">Dependencies</Label>
+                                                    <Input
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.dependencies}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, dependencies: e.target.value })}
+                                                        placeholder="Optional (comma separated)"
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">Start Date</Label>
+                                                    <Input
+                                                        type="date"
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.start_date}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, start_date: e.target.value })}
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">End Date</Label>
+                                                    <Input
+                                                        type="date"
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.end_date}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, end_date: e.target.value })}
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">Tag</Label>
+                                                    <Input
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.tag}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, tag: e.target.value })}
+                                                        placeholder="e.g. Civil / MEP"
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-center gap-4">
+                                                    <Label className="text-right text-slate-700">Owner</Label>
+                                                    <Input
+                                                        list="team-member-names"
+                                                        className="col-span-3 bg-white text-slate-900 border-slate-300"
+                                                        value={newActivity.owner}
+                                                        onChange={(e) => setNewActivity({ ...newActivity, owner: e.target.value })}
+                                                        placeholder="e.g. Site Supervisor"
+                                                    />
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3">
+                                                <div className="relative">
+                                                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-500" />
+                                                    <Input
+                                                        placeholder="Search standard activities..."
+                                                        className="pl-9 bg-slate-50 border-slate-200"
+                                                        value={searchTerm}
+                                                        onChange={(e) => setSearchTerm(e.target.value)}
+                                                    />
+                                                </div>
+
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    <div className="space-y-1">
+                                                        <Label className="text-slate-700">Start Date</Label>
+                                                        <Input
+                                                            type="date"
+                                                            className="bg-white text-slate-900 border-slate-300"
+                                                            value={bulkStartDate}
+                                                            onChange={(e) => setBulkStartDate(e.target.value)}
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1">
+                                                        <Label className="text-slate-700">End Date</Label>
+                                                        <Input
+                                                            type="date"
+                                                            className="bg-white text-slate-900 border-slate-300"
+                                                            value={bulkEndDate}
+                                                            onChange={(e) => setBulkEndDate(e.target.value)}
+                                                        />
+                                                    </div>
+                                                    <div className="space-y-1 col-span-2">
+                                                        <Label className="text-slate-700">Owner</Label>
+                                                        <Input
+                                                            list="team-member-names"
+                                                            className="bg-white text-slate-900 border-slate-300"
+                                                            value={bulkOwner}
+                                                            onChange={(e) => setBulkOwner(e.target.value)}
+                                                            placeholder="e.g. Site Supervisor"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="border rounded-md h-[300px] overflow-y-auto">
+                                                    <Table>
+                                                        <TableBody>
+                                                            {filteredMasterList.length === 0 ? (
+                                                                <TableRow>
+                                                                    <TableCell className="text-center text-slate-500 py-4">No activities found.</TableCell>
+                                                                </TableRow>
+                                                            ) : (
+                                                                filteredMasterList.map((item) => (
+                                                                    <TableRow
+                                                                        key={item.name}
+                                                                        className="cursor-pointer hover:bg-slate-50"
+                                                                        onClick={() => toggleActivitySelection(item.name)}
+                                                                    >
+                                                                        <TableCell className="w-[40px]">
+                                                                            <input
+                                                                                type="checkbox"
+                                                                                className="rounded border-gray-300 accent-blue-600 h-4 w-4"
+                                                                                checked={selectedActivities.includes(item.name)}
+                                                                                readOnly
+                                                                            />
+                                                                        </TableCell>
+                                                                        <TableCell className="font-medium text-slate-700">{item.name}</TableCell>
+                                                                        <TableCell className="text-right">
+                                                                            <span className="text-xs text-slate-400 bg-slate-100 px-2 py-1 rounded-full">{item.tag}</span>
+                                                                        </TableCell>
+                                                                    </TableRow>
+                                                                ))
+                                                            )}
+                                                        </TableBody>
+                                                    </Table>
+                                                </div>
+
+                                                <p className="text-xs text-slate-500 text-right">
+                                                    {selectedActivities.length} activities selected
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                                 <DialogFooter>
                                     <Button onClick={handleSaveActivity} disabled={isSaving} className="bg-blue-600 text-white hover:bg-blue-700">
-                                        {isSaving ? 'Saving...' : (editingId ? 'Update Activity' : `Add ${selectedActivities.length > 0 ? selectedActivities.length : ''} Activities`)}
+                                        {isSaving ? 'Saving...' : (editingId ? 'Update Activity' : (createMode === "custom" ? "Add Activity" : `Add ${selectedActivities.length > 0 ? selectedActivities.length : ''} Activities`))}
                                     </Button>
                                 </DialogFooter>
                             </DialogContent>

@@ -44,6 +44,7 @@ export default function SchedulePage() {
     const [editingEvent, setEditingEvent] = useState<ScheduleEvent | null>(null);
     const [isSaving, setIsSaving] = useState(false);
     const [currentUser, setCurrentUser] = useState('');
+    const [teamNames, setTeamNames] = useState<string[]>([]);
     
     // Form state
     const [eventForm, setEventForm] = useState({
@@ -62,6 +63,21 @@ export default function SchedulePage() {
         fetchProjects();
         fetchCurrentUser();
     }, [currentDate, viewMode]);
+
+    useEffect(() => {
+        fetchTeamNames();
+    }, []);
+
+    const fetchTeamNames = async () => {
+        const { data, error } = await supabase.from('profiles').select('full_name').order('full_name');
+        if (error) {
+            console.error('Profiles fetch error:', error);
+            setTeamNames([]);
+            return;
+        }
+        const names = (data || []).map((r: any) => String(r.full_name || '').trim()).filter(Boolean);
+        setTeamNames(Array.from(new Set(names)));
+    };
 
     const fetchCurrentUser = async () => {
         const { data: { user } } = await supabase.auth.getUser();
@@ -500,6 +516,11 @@ export default function SchedulePage() {
                             {editingEvent ? 'Update event details' : 'Create a new calendar event'}
                         </DialogDescription>
                     </DialogHeader>
+                    <datalist id="team-member-names">
+                        {teamNames.map((n) => (
+                            <option key={n} value={n} />
+                        ))}
+                    </datalist>
                     <div className="space-y-4 py-4">
                         {projects.length === 0 && (
                             <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
@@ -583,6 +604,7 @@ export default function SchedulePage() {
                                 <Label htmlFor="owner">Owner</Label>
                                 <Input
                                     id="owner"
+                                    list="team-member-names"
                                     value={eventForm.owner}
                                     onChange={(e) => setEventForm({ ...eventForm, owner: e.target.value })}
                                     placeholder="Event owner"

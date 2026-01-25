@@ -46,6 +46,8 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
+    const [teamNames, setTeamNames] = useState<string[]>([]);
     const [newActivity, setNewActivity] = useState<{
         activity_name: string;
         description: string;
@@ -81,7 +83,7 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
         const { data, error } = await supabase
             .from('site_activities')
             .select('*')
-            .eq('project_id', projectId)
+            .eq('project_id', Number(projectId))
             .order('start_date', { ascending: true });
 
         if (error) {
@@ -96,6 +98,20 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
     useEffect(() => {
         if (projectId) fetchActivities();
     }, [projectId]);
+
+    useEffect(() => {
+        const fetchTeamNames = async () => {
+            const { data, error } = await supabase.from('profiles').select('full_name').order('full_name');
+            if (error) {
+                console.error('Profiles fetch error:', error);
+                setTeamNames([]);
+                return;
+            }
+            const names = (data || []).map((r: any) => String(r.full_name || '').trim()).filter(Boolean);
+            setTeamNames(Array.from(new Set(names)));
+        };
+        fetchTeamNames();
+    }, []);
 
     const handleFilterChange = (key: keyof typeof filters, value: string) => {
         setFilters(prev => ({ ...prev, [key]: value }));
@@ -152,6 +168,24 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
     };
 
     const handleSave = async () => {
+        if (!projectId || !Number.isFinite(Number(projectId))) {
+            toast.error("Invalid project");
+            return;
+        }
+        if (!newActivity.activity_name.trim()) {
+            toast.error("Activity name is required");
+            return;
+        }
+        if (!newActivity.start_date || !newActivity.end_date) {
+            toast.error("Start date and end date are required");
+            return;
+        }
+        if (new Date(newActivity.start_date) > new Date(newActivity.end_date)) {
+            toast.error("End date must be on or after start date");
+            return;
+        }
+
+        setIsSaving(true);
         const payload = {
             project_id: Number(projectId),
             activity_name: newActivity.activity_name,
@@ -179,7 +213,7 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
 
         if (error) {
             console.error("Save error:", error);
-            toast.error("Failed to save activity.");
+            toast.error(error.message || "Failed to save activity.");
         } else {
             toast.success(editingId ? "Activity updated." : "Activity added.");
             setIsDialogOpen(false);
@@ -195,6 +229,7 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
             });
             fetchActivities();
         }
+        setIsSaving(false);
     };
 
     return (
@@ -247,11 +282,16 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                 <PlusIcon className="w-3 h-3 mr-1.5" /> Activity
                             </Button>
                         </DialogTrigger>
-                        <DialogContent className="max-w-2xl">
+                        <DialogContent className="max-w-2xl bg-white">
                             <DialogHeader>
                                 <DialogTitle>{editingId ? "Edit Activity" : "Add Activity"}</DialogTitle>
                                 <DialogDescription>Enter the details for this activity.</DialogDescription>
                             </DialogHeader>
+                            <datalist id="team-member-names">
+                                {teamNames.map((n) => (
+                                    <option key={n} value={n} />
+                                ))}
+                            </datalist>
                             <div className="grid gap-4 py-4">
                                 <div className="grid grid-cols-4 items-center gap-4">
                                     <Label className="text-right">Activity</Label>
@@ -307,15 +347,16 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                     <Label className="text-right">Owner</Label>
                                     <Input
                                         className="col-span-3"
+                                        list="team-member-names"
                                         value={newActivity.owner}
                                         onChange={(e) => setNewActivity({ ...newActivity, owner: e.target.value })}
                                     />
                                 </div>
                             </div>
-                            <div className="flex justify-end gap-2">
+                            <DialogFooter>
                                 <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
-                                <Button onClick={handleSave}>Save</Button>
-                            </div>
+                                <Button onClick={handleSave} disabled={isSaving}>{isSaving ? "Saving..." : "Save"}</Button>
+                            </DialogFooter>
                         </DialogContent>
                     </Dialog>
 

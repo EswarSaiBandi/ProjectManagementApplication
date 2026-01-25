@@ -2,9 +2,6 @@ node_modules
 .DS_Store
 dist
 build
-.env
-.env.local
-.vercel
 .turbo
 .next
 out

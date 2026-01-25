@@ -30,3 +30,4 @@ create policy "Enable delete access for authenticated users"
 on public.client_updates for delete
 to authenticated
 using (true);
+
