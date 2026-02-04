@@ -279,6 +279,15 @@ export default function ReportsPage() {
         return 'bg-gray-100 text-gray-800';
     };
 
+    const getStatusBarColor = (status: string) => {
+        const statusLower = status?.toLowerCase() || '';
+        if (statusLower.includes('completed')) return 'bg-green-500';
+        if (statusLower.includes('handover')) return 'bg-indigo-500';
+        if (statusLower.includes('execution') || statusLower.includes('progress')) return 'bg-blue-500';
+        if (statusLower.includes('planning') || statusLower.includes('pending')) return 'bg-yellow-500';
+        return 'bg-slate-400';
+    };
+
     const renderFinancialReport = () => (
         <div className="space-y-6">
             <div className="grid gap-4 md:grid-cols-3">
@@ -675,10 +684,13 @@ export default function ReportsPage() {
                                             <span>{status}</span>
                                             <span className="font-semibold">{count} ({percentage}%)</span>
                                         </div>
-                                        <div className="flex-1 bg-gray-200 rounded-full h-2">
+                                        <div className="flex-1 bg-slate-200 dark:bg-slate-800 rounded-full h-2">
                                             <div 
-                                                className={`h-2 rounded-full ${getStatusColor(status)}`}
-                                                style={{ width: `${percentage}%` }}
+                                                className={`h-2 rounded-full ${getStatusBarColor(status)}`}
+                                                style={{
+                                                    width: `${percentage}%`,
+                                                    minWidth: count > 0 ? '6px' : undefined,
+                                                }}
                                             />
                                         </div>
                                     </div>

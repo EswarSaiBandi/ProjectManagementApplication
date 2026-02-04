@@ -69,7 +69,8 @@ export async function middleware(request: NextRequest) {
     // https://supabase.com/docs/guides/auth/server-side/nextjs
     const { data: { user } } = await supabase.auth.getUser()
 
-    const protectedPaths = ['/projects', '/dashboard', '/settings']
+    // Protect all authenticated app areas (sidebar pages + project pages).
+    const protectedPaths = ['/projects', '/dashboard', '/settings', '/schedule', '/tasks', '/team', '/reports', '/inventory']
     const isProtectedPath = protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))
 
     if (!user && isProtectedPath) {

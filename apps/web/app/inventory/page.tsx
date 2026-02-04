@@ -387,14 +387,18 @@ export default function InventoryPage() {
             <Card>
                 <CardContent className="pt-6">
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <div className="relative md:col-span-2">
-                            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                            <Input
-                                placeholder="Search by name, SKU, or category..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="pl-10"
-                            />
+                        <div className="space-y-2 md:col-span-2">
+                            <Label htmlFor="inventory_search">Search</Label>
+                            <div className="relative">
+                                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                                <Input
+                                    id="inventory_search"
+                                    placeholder="Search by name, SKU, or category..."
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery(e.target.value)}
+                                    className="pl-10"
+                                />
+                            </div>
                         </div>
                         <div className="space-y-2">
                             <Label htmlFor="category">Category</Label>

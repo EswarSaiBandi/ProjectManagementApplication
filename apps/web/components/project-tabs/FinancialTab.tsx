@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
     CheckCircle2, TrendingUp, Wallet,
-    ArrowUpRight, ArrowDownLeft, Calendar, Filter, Search, Image as ImageIcon, ExternalLink, MessageSquare, Plus, Pencil, Trash
+    ArrowUpRight, ArrowDownLeft, Calendar, Filter, Search, Image as ImageIcon, ExternalLink, MessageSquare, Plus, Pencil, Trash, ArrowUpDown
 } from "lucide-react";
 
 type Transaction = {
@@ -37,6 +37,19 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [quotesTotal, setQuotesTotal] = useState<number>(0);
     const [loading, setLoading] = useState(true);
+
+    const [txFilters, setTxFilters] = useState({
+        createdOn: '',
+        transactionDate: '',
+        createdBy: '',
+        vendor: '',
+        description: '',
+        channel: '',
+        user: '',
+        order: '',
+    });
+
+    const [txSort, setTxSort] = useState<{ key: 'amount'; direction: 'asc' | 'desc' } | null>(null);
 
     // Payment Form State
     const [isPaymentOpen, setIsPaymentOpen] = useState(false);
@@ -102,6 +115,53 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
         }
     }, [projectId]);
 
+    const handleTxFilterChange = (key: keyof typeof txFilters, value: string) => {
+        setTxFilters((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const filteredTransactions = transactions.filter((t) => {
+        const createdAtDate = (t.created_at || '').slice(0, 10); // YYYY-MM-DD
+        const transactionDate = (t.transaction_date || '').slice(0, 10); // YYYY-MM-DD
+
+        const createdBy = String(t.created_by_name || '').toLowerCase();
+        const vendor = String(t.vendor_name || '').toLowerCase();
+        const description = String(t.description || '').toLowerCase();
+        const channel = String(t.payment_channel || '').toLowerCase();
+        const user = String(t.user_name || '').toLowerCase();
+        const order = String(t.order_reference || '').toLowerCase();
+
+        const createdOnFilter = txFilters.createdOn.trim();
+        const transactionDateFilter = txFilters.transactionDate.trim();
+
+        const createdByFilter = txFilters.createdBy.trim().toLowerCase();
+        const vendorFilter = txFilters.vendor.trim().toLowerCase();
+        const descriptionFilter = txFilters.description.trim().toLowerCase();
+        const channelFilter = txFilters.channel.trim().toLowerCase();
+        const userFilter = txFilters.user.trim().toLowerCase();
+        const orderFilter = txFilters.order.trim().toLowerCase();
+
+        return (
+            (!createdOnFilter || createdAtDate === createdOnFilter) &&
+            (!transactionDateFilter || transactionDate === transactionDateFilter) &&
+            (!createdByFilter || createdBy.includes(createdByFilter)) &&
+            (!vendorFilter || vendor.includes(vendorFilter)) &&
+            (!descriptionFilter || description.includes(descriptionFilter)) &&
+            (!channelFilter || channel.includes(channelFilter)) &&
+            (!userFilter || user.includes(userFilter)) &&
+            (!orderFilter || order.includes(orderFilter))
+        );
+    });
+
+    const sortedTransactions = (() => {
+        if (!txSort) return filteredTransactions;
+        const dir = txSort.direction === 'asc' ? 1 : -1;
+        return [...filteredTransactions].sort((a, b) => {
+            const av = Number(a.amount ?? 0);
+            const bv = Number(b.amount ?? 0);
+            return (av - bv) * dir;
+        });
+    })();
+
     const handleEditTransaction = (transaction: Transaction) => {
         setCurrentTransactionId(transaction.transaction_id);
         setNewPayment({
@@ -132,16 +192,39 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
             finalAmount = -finalAmount;
         }
 
+        // Best-effort: stamp current logged-in user info (no hard dependency on profiles RLS)
+        let createdByName = "Current User";
+        let accountEmail = "Current User";
+        try {
+            const { data: authData } = await supabase.auth.getUser();
+            const user = authData?.user;
+            if (user?.email) {
+                createdByName = user.email;
+                accountEmail = user.email;
+            }
+            if (user?.id) {
+                const { data: prof } = await supabase
+                    .from('profiles')
+                    .select('full_name')
+                    .eq('user_id', user.id)
+                    .limit(1);
+                const fullName = String(prof?.[0]?.full_name || '').trim();
+                if (fullName) createdByName = fullName;
+            }
+        } catch {
+            // ignore and keep placeholders
+        }
+
         const paymentPayload = {
             transaction_date: new Date().toISOString().split('T')[0],
-            created_by_name: "Me (Admin)",
+            created_by_name: createdByName,
             vendor_name: newPayment.vendor_name,
             description: newPayment.description,
             payment_channel: "Manual",
             amount: finalAmount,
             type: newPayment.type,
             category: newPayment.category,
-            user_name: "Current User",
+            user_name: accountEmail,
             project_id: Number(projectId),
             receipt_url: newPayment.receipt_url
         };
@@ -183,7 +266,6 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
 
         if (!error) {
             toast.success(currentTransactionId ? "Transaction updated successfully." : "Payment saved successfully.");
-            setIsPaymentOpen(false);
             setIsPaymentOpen(false);
             setNewPayment({ vendor_name: '', amount: '', description: '', type: 'Debit', category: 'VendorPayment', receipt_url: '' }); // Reset
             setReceiptFile(null);
@@ -518,7 +600,21 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                 <TableHead>Vendor</TableHead>
                                 <TableHead>Transaction</TableHead>
                                 <TableHead>Channel</TableHead>
-                                <TableHead className="text-right">Amount</TableHead>
+                                <TableHead className="text-right">
+                                    <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 hover:text-slate-900"
+                                        onClick={() => {
+                                            setTxSort((prev) => {
+                                                if (!prev) return { key: 'amount', direction: 'desc' };
+                                                return { key: 'amount', direction: prev.direction === 'desc' ? 'asc' : 'desc' };
+                                            });
+                                        }}
+                                        title="Sort by amount"
+                                    >
+                                        Amount <ArrowUpDown className="h-3.5 w-3.5" />
+                                    </button>
+                                </TableHead>
                                 <TableHead className="text-center">Receipt</TableHead>
                                 <TableHead className="text-center">User</TableHead>
                                 <TableHead>Order</TableHead>
@@ -528,19 +624,88 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                             </TableRow>
                             {/* Filter Row */}
                             <TableRow className="bg-gray-50 hover:bg-gray-50">
-                                <TableHead className="p-1"><div className="flex justify-center"><Calendar className="h-4 w-4 text-gray-400" /></div></TableHead>
-                                <TableHead className="p-1"><div className="flex justify-center"><Calendar className="h-4 w-4 text-gray-400" /></div></TableHead>
-                                <TableHead className="p-1"><div className="flex justify-start"><Filter className="h-4 w-4 text-gray-400 ml-2" /></div></TableHead>
-                                <TableHead className="p-1"><Input className="h-8 text-xs bg-white" placeholder="Search..." /></TableHead>
-                                <TableHead className="p-1"><Input className="h-8 text-xs bg-white" placeholder="Search..." /></TableHead>
-                                <TableHead className="p-1"><Input className="h-8 text-xs bg-white" placeholder="Search..." /></TableHead>
-                                <TableHead className="p-1"><Input className="h-8 text-xs bg-white" placeholder="Search..." /></TableHead>
+                                <TableHead className="p-1">
+                                    <div className="relative">
+                                        <Calendar className="absolute left-2 top-2 h-4 w-4 text-gray-400" />
+                                        <Input
+                                            type="date"
+                                            className="h-8 text-xs bg-white pl-8"
+                                            value={txFilters.createdOn}
+                                            onChange={(e) => handleTxFilterChange('createdOn', e.target.value)}
+                                        />
+                                    </div>
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <div className="relative">
+                                        <Calendar className="absolute left-2 top-2 h-4 w-4 text-gray-400" />
+                                        <Input
+                                            type="date"
+                                            className="h-8 text-xs bg-white pl-8"
+                                            value={txFilters.transactionDate}
+                                            onChange={(e) => handleTxFilterChange('transactionDate', e.target.value)}
+                                        />
+                                    </div>
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <div className="relative">
+                                        <Filter className="absolute left-2 top-2 h-4 w-4 text-gray-400" />
+                                        <Input
+                                            className="h-8 text-xs bg-white pl-8"
+                                            placeholder="Search..."
+                                            value={txFilters.createdBy}
+                                            onChange={(e) => handleTxFilterChange('createdBy', e.target.value)}
+                                        />
+                                    </div>
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <Input
+                                        className="h-8 text-xs bg-white"
+                                        placeholder="Search..."
+                                        value={txFilters.vendor}
+                                        onChange={(e) => handleTxFilterChange('vendor', e.target.value)}
+                                    />
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <Input
+                                        className="h-8 text-xs bg-white"
+                                        placeholder="Search..."
+                                        value={txFilters.description}
+                                        onChange={(e) => handleTxFilterChange('description', e.target.value)}
+                                    />
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <Input
+                                        className="h-8 text-xs bg-white"
+                                        placeholder="Search..."
+                                        value={txFilters.channel}
+                                        onChange={(e) => handleTxFilterChange('channel', e.target.value)}
+                                    />
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <div className="h-8" />
+                                </TableHead>
                                 <TableHead className="p-1"></TableHead>
-                                <TableHead className="p-1"><div className="flex justify-center"><Search className="h-4 w-4 text-gray-400" /></div></TableHead>
-                                <TableHead className="p-1"><Input className="h-8 text-xs bg-white" placeholder="Search..." /></TableHead>
+                                <TableHead className="p-1">
+                                    <div className="h-8" />
+                                </TableHead>
+                                <TableHead className="p-1">
+                                    <Input
+                                        className="h-8 text-xs bg-white"
+                                        placeholder="Search..."
+                                        value={txFilters.user}
+                                        onChange={(e) => handleTxFilterChange('user', e.target.value)}
+                                    />
+                                </TableHead>
                                 <TableHead className="p-1"></TableHead>
                                 <TableHead className="p-1"></TableHead>
-                                <TableHead className="p-1"></TableHead>
+                                <TableHead className="p-1">
+                                    <Input
+                                        className="h-8 text-xs bg-white"
+                                        placeholder="Search..."
+                                        value={txFilters.order}
+                                        onChange={(e) => handleTxFilterChange('order', e.target.value)}
+                                    />
+                                </TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -552,8 +717,12 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                 <TableRow>
                                     <TableCell colSpan={13} className="text-center py-8">No transactions found.</TableCell>
                                 </TableRow>
+                            ) : filteredTransactions.length === 0 ? (
+                                <TableRow>
+                                    <TableCell colSpan={13} className="text-center py-8">No matching transactions.</TableCell>
+                                </TableRow>
                             ) : (
-                                transactions.map((t) => (
+                                sortedTransactions.map((t) => (
                                     <TableRow key={t.transaction_id} className="hover:bg-gray-50">
                                         <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDate(t.created_at)}</TableCell>
                                         <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDate(t.transaction_date)}</TableCell>

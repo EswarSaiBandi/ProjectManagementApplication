@@ -19,6 +19,13 @@ import { Progress } from "@/components/ui/progress";
 import {
     DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
     Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger
@@ -119,12 +126,26 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
 
     // Filter Logic
     const filteredActivities = activities.filter(activity => {
+        const ownerStr = String(activity.owner || '').trim().toLowerCase();
+        const ownerFilter = filters.owner.trim().toLowerCase();
+        const statusFilter = filters.status.trim().toLowerCase();
+        const activityStatusStr = String(activity.status || '').toLowerCase();
+        const progressStr = String(activity.progress ?? '');
+        const matchesStatusOrProgress =
+            !statusFilter ||
+            activityStatusStr.includes(statusFilter) ||
+            progressStr.includes(filters.status.trim());
+        const matchesOwner = !ownerFilter || ownerStr === ownerFilter;
+
         return (
             (activity.activity_name?.toLowerCase() || '').includes(filters.activity.toLowerCase()) &&
             (activity.description?.toLowerCase() || '').includes(filters.description.toLowerCase()) &&
             (filters.dependency === '' || (activity.dependencies?.toLowerCase() || '').includes(filters.dependency.toLowerCase())) &&
             (activity.start_date?.includes(filters.startDate) || !filters.startDate) &&
-            (activity.tag?.toLowerCase().includes(filters.tag.toLowerCase()) || !filters.tag)
+            (activity.end_date?.includes(filters.endDate) || !filters.endDate) &&
+            (String(activity.tag || '').toLowerCase().includes(filters.tag.trim().toLowerCase()) || !filters.tag.trim()) &&
+            matchesOwner &&
+            matchesStatusOrProgress
         );
     });
 
@@ -234,6 +255,11 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
 
     return (
         <div className="space-y-4">
+            <datalist id="team-member-names-filter">
+                {teamNames.map((n) => (
+                    <option key={n} value={n} />
+                ))}
+            </datalist>
             {/* Top Controls (View Toggle) */}
             <div className="flex justify-between items-center">
                 <div className="flex bg-slate-100 p-1 rounded-md">
@@ -426,7 +452,12 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                         <span className="font-semibold text-slate-700">Start Date</span>
                                         <div className="relative">
                                             <Calendar className="absolute left-2 top-2 h-3 w-3 text-slate-400" />
-                                            <Input className="h-8 pl-7 text-xs bg-white" placeholder="" />
+                                            <Input
+                                                type="date"
+                                                className="h-8 pl-7 text-xs bg-white"
+                                                value={filters.startDate}
+                                                onChange={(e) => handleFilterChange('startDate', e.target.value)}
+                                            />
                                         </div>
                                     </div>
                                 </TableHead>
@@ -434,8 +465,13 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                     <div className="flex flex-col gap-2">
                                         <span className="font-semibold text-slate-700">End Date</span>
                                         <div className="relative">
-                                            <Search className="absolute left-2 top-2 h-3 w-3 text-slate-400" />
-                                            <Input className="h-8 pl-7 text-xs bg-white" placeholder="" />
+                                            <Calendar className="absolute left-2 top-2 h-3 w-3 text-slate-400" />
+                                            <Input
+                                                type="date"
+                                                className="h-8 pl-7 text-xs bg-white"
+                                                value={filters.endDate}
+                                                onChange={(e) => handleFilterChange('endDate', e.target.value)}
+                                            />
                                         </div>
                                     </div>
                                 </TableHead>
@@ -460,10 +496,22 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                 <TableHead className="w-[100px] align-top py-3">
                                     <div className="flex flex-col gap-2">
                                         <span className="font-semibold text-slate-700">Owner</span>
-                                        <div className="relative">
-                                            <Filter className="absolute left-2 top-2 h-3 w-3 text-slate-400" />
-                                            <Input className="h-8 pl-7 text-xs bg-white" placeholder="" />
-                                        </div>
+                                        <Select
+                                            value={filters.owner || "__all__"}
+                                            onValueChange={(v) => handleFilterChange('owner', v === "__all__" ? "" : v)}
+                                        >
+                                            <SelectTrigger className="h-8 text-xs bg-white">
+                                                <SelectValue placeholder="All" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="__all__">All</SelectItem>
+                                                {teamNames.map((n) => (
+                                                    <SelectItem key={n} value={n}>
+                                                        {n}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
                                     </div>
                                 </TableHead>
 
@@ -473,7 +521,12 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                         <span className="font-semibold text-slate-700">Current Status</span>
                                         <div className="relative">
                                             <Search className="absolute left-2 top-2 h-3 w-3 text-slate-400" />
-                                            <Input className="h-8 pl-7 text-xs bg-white" placeholder="" />
+                                            <Input
+                                                className="h-8 pl-7 text-xs bg-white"
+                                                placeholder=""
+                                                value={filters.status}
+                                                onChange={(e) => handleFilterChange('status', e.target.value)}
+                                            />
                                         </div>
                                     </div>
                                 </TableHead>
