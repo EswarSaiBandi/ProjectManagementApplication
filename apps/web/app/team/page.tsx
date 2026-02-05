@@ -117,15 +117,19 @@ export default function TeamPage() {
     };
 
     const handleSaveMember = async () => {
-        if (!memberForm.email || !memberForm.full_name) {
-            toast.error('Email and Full Name are required');
+        if (!memberForm.full_name.trim()) {
+            toast.error('Full Name is required');
             return;
         }
-
-        // For new members, password is required
-        if (!editingMember && !memberForm.password) {
-            toast.error('Password is required for new members');
-            return;
+        if (!editingMember) {
+            if (!memberForm.email.trim()) {
+                toast.error('Email is required for new members');
+                return;
+            }
+            if (!memberForm.password) {
+                toast.error('Password is required for new members');
+                return;
+            }
         }
 
         setIsSaving(true);
@@ -144,40 +148,32 @@ export default function TeamPage() {
                 if (error) throw error;
                 toast.success('Team member updated successfully');
             } else {
-                // Create new user in auth
-                const { data: authData, error: authError } = await supabase.auth.signUp({
-                    email: memberForm.email,
-                    password: memberForm.password,
-                    options: {
-                        data: {
-                            full_name: memberForm.full_name,
-                        }
-                    }
-                });
+                // Create new user without triggering Supabase email rate limits
+                const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+                if (sessionError) throw sessionError;
+                const token = sessionData?.session?.access_token;
+                if (!token) throw new Error('You must be logged in to create a member');
 
-                if (authError) throw authError;
-
-                if (!authData.user) {
-                    throw new Error('User creation failed');
-                }
-
-                // Create profile entry
-                const { error: profileError } = await supabase
-                    .from('profiles')
-                    .insert([{
-                        user_id: authData.user.id,
+                const res = await fetch('/api/team/members', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                    },
+                    body: JSON.stringify({
+                        email: memberForm.email,
+                        password: memberForm.password,
                         full_name: memberForm.full_name,
                         role: memberForm.role,
-                        phone: memberForm.phone || null,
-                    }]);
-
-                if (profileError) {
-                    // If profile creation fails, try to delete the auth user
-                    console.error('Profile creation error:', profileError);
-                    throw profileError;
+                        phone: memberForm.phone,
+                    }),
+                });
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    throw new Error(json?.error || 'Failed to create team member');
                 }
 
-                toast.success('Team member created successfully. They will receive an email confirmation.');
+                toast.success('Team member created successfully. No email was sent — share the credentials with them.');
             }
 
             setIsMemberDialogOpen(false);
@@ -359,7 +355,7 @@ export default function TeamPage() {
                         <DialogDescription>
                             {editingMember 
                                 ? 'Update team member information' 
-                                : 'Create a new team member account. They will receive an email to confirm their account.'}
+                                : 'Create a new team member account. No email will be sent (avoids Supabase email rate limits).'}
                         </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4 py-4">
@@ -396,7 +392,7 @@ export default function TeamPage() {
                                     placeholder="Minimum 6 characters"
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                    The member will receive an email to set their own password
+                                    Share this password with the member. They can change it after logging in.
                                 </p>
                             </div>
                         )}

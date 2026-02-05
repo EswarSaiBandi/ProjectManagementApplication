@@ -348,11 +348,10 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
     };
 
     const toggleActivitySelection = (name: string) => {
-        if (selectedActivities.includes(name)) {
-            setSelectedActivities(selectedActivities.filter(item => item !== name));
-        } else {
-            setSelectedActivities([...selectedActivities, name]);
-        }
+        setSelectedActivities((prev) => {
+            if (prev.includes(name)) return prev.filter((item) => item !== name);
+            return [...prev, name];
+        });
     };
 
     const filteredMasterList = MASTER_ACTIVITIES.filter(item =>
@@ -672,7 +671,8 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                                                                                 type="checkbox"
                                                                                 className="rounded border-gray-300 accent-blue-600 h-4 w-4"
                                                                                 checked={selectedActivities.includes(item.name)}
-                                                                                readOnly
+                                                                                onClick={(e) => e.stopPropagation()}
+                                                                                onChange={() => toggleActivitySelection(item.name)}
                                                                             />
                                                                         </TableCell>
                                                                         <TableCell className="font-medium text-slate-700">{item.name}</TableCell>
@@ -730,9 +730,6 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                         <Table>
                             <TableHeader className="bg-slate-50 sticky top-0 z-10">
                                 <TableRow className="hover:bg-transparent border-b border-slate-200">
-                                    <TableHead className="w-10">
-                                        <input type="checkbox" className="rounded border-gray-300" />
-                                    </TableHead>
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Activity</TableHead>
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Start Date</TableHead>
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">End Date</TableHead>
@@ -746,16 +743,13 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                             <TableBody>
                                 {activities.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={9} className="h-24 text-center text-slate-500">
+                                        <TableCell colSpan={8} className="h-24 text-center text-slate-500">
                                             No activities found. Create one to get started.
                                         </TableCell>
                                     </TableRow>
                                 ) : (
                                     activities.map((activity) => (
                                         <TableRow key={activity.activity_id} className="group hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
-                                            <TableCell>
-                                                <input type="checkbox" className="rounded border-gray-300" />
-                                            </TableCell>
                                             <TableCell className="font-medium text-slate-900">
                                                 {activity.activity_name}
                                             </TableCell>
