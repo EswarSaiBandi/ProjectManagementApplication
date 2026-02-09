@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Percent, Plus, Pencil, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, Mail, Percent, Plus, Pencil, Trash2 } from "lucide-react";
 
 type ProjectQuote = {
   id?: number;
@@ -20,13 +20,36 @@ type ProjectQuote = {
   project_id: number;
   quote_number: string | null;
   vendor_name: string | null;
+  customer_name?: string | null;
+  customer_address?: string | null;
+  subject?: string | null;
   title: string | null;
   total_amount: number | null;
+  gst_percent?: number | null;
+  sub_total?: number | null;
+  gst_amount?: number | null;
+  grand_total?: number | null;
+  terms?: string | null;
+  share_token?: string | null;
+  share_enabled?: boolean | null;
   status: string;
   issued_date: string | null;
   notes: string | null;
   created_at: string;
   created_by: string | null;
+};
+
+type QuoteItem = {
+  id: number;
+  quote_id: number;
+  line_no: number;
+  scope: string;
+  metric: string | null;
+  quantity: number | null;
+  unit_price: number | null;
+  amount: number | null;
+  created_at: string;
+  updated_at: string;
 };
 
 const STATUS_OPTIONS = ["Draft", "Sent", "Approved", "Rejected"] as const;
@@ -50,11 +73,28 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
   const [editing, setEditing] = useState<ProjectQuote | null>(null);
   const [editingKey, setEditingKey] = useState<{ column: string; value: number } | null>(null);
 
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [activeQuote, setActiveQuote] = useState<ProjectQuote | null>(null);
+  const [items, setItems] = useState<QuoteItem[]>([]);
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [itemForm, setItemForm] = useState({
+    scope: "",
+    metric: "Sq. Ft",
+    quantity: "",
+    unit_price: "",
+    amount: "",
+  });
+
   const [form, setForm] = useState({
     quote_number: "",
     vendor_name: "",
+    customer_name: "",
+    customer_address: "",
+    subject: "",
     title: "",
     total_amount: "",
+    gst_percent: "18",
+    terms: "",
     status: "Draft",
     issued_date: "",
     notes: "",
@@ -65,12 +105,34 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
     setForm({
       quote_number: "",
       vendor_name: "",
+      customer_name: "",
+      customer_address: "",
+      subject: "",
       title: "",
       total_amount: "",
+      gst_percent: "18",
+      terms: "",
       status: "Draft",
       issued_date: "",
       notes: "",
     });
+  };
+
+  const resetItemForm = () => {
+    setItemForm({ scope: "", metric: "Sq. Ft", quantity: "", unit_price: "", amount: "" });
+  };
+
+  const generateToken = () => {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
+  const shareUrl = (q: ProjectQuote) => {
+    if (!q.share_token) return "";
+    return `${window.location.origin}/quote/share/${q.share_token}`;
   };
 
   const fetchQuotes = async () => {
@@ -113,13 +175,261 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
     setForm({
       quote_number: q.quote_number || "",
       vendor_name: q.vendor_name || "",
+      customer_name: q.customer_name || "",
+      customer_address: q.customer_address || "",
+      subject: (q.subject as any) || "",
       title: q.title || "",
       total_amount: q.total_amount != null ? String(q.total_amount) : "",
+      gst_percent: q.gst_percent != null ? String(q.gst_percent) : "18",
+      terms: (q.terms as any) || "",
       status: q.status || "Draft",
       issued_date: q.issued_date || "",
       notes: q.notes || "",
     });
     setIsOpen(true);
+  };
+
+  const fetchItems = async (quoteId: number) => {
+    setItemsLoading(true);
+    const { data, error } = await supabase
+      .from("project_quote_items")
+      .select("*")
+      .eq("quote_id", quoteId)
+      .order("line_no", { ascending: true });
+    if (error) {
+      console.error("Items fetch error:", error);
+      toast.error(error.message || "Failed to load quote items");
+      setItems([]);
+    } else {
+      setItems((data || []) as QuoteItem[]);
+    }
+    setItemsLoading(false);
+  };
+
+  const openDetails = async (q: ProjectQuote) => {
+    if (!q.id) {
+      toast.error("Missing quote id");
+      return;
+    }
+    setActiveQuote(q);
+    setDetailsOpen(true);
+    resetItemForm();
+    await fetchItems(q.id);
+  };
+
+  const computeSubTotal = (lineItems: QuoteItem[]) => {
+    return lineItems.reduce((sum, it) => {
+      const qty = it.quantity != null ? Number(it.quantity) : null;
+      const price = it.unit_price != null ? Number(it.unit_price) : null;
+      const amount = it.amount != null ? Number(it.amount) : qty != null && price != null ? qty * price : 0;
+      return sum + (Number.isFinite(amount) ? amount : 0);
+    }, 0);
+  };
+
+  const updateTotals = async (quote: ProjectQuote, lineItems: QuoteItem[]) => {
+    if (!quote.id) return;
+    const subTotal = computeSubTotal(lineItems);
+    const gstPercent = Number(quote.gst_percent ?? 18) || 0;
+    const gstAmount = Math.round((subTotal * gstPercent) / 100 * 100) / 100;
+    const grandTotal = Math.round((subTotal + gstAmount) * 100) / 100;
+    const { error } = await supabase
+      .from("project_quotes")
+      .update({
+        sub_total: subTotal,
+        gst_percent: gstPercent,
+        gst_amount: gstAmount,
+        grand_total: grandTotal,
+        total_amount: grandTotal,
+      })
+      .eq("id", quote.id);
+    if (error) {
+      console.error("Totals update error:", error);
+      return;
+    }
+    setActiveQuote((prev) =>
+      prev && prev.id === quote.id
+        ? { ...prev, sub_total: subTotal, gst_percent: gstPercent, gst_amount: gstAmount, grand_total: grandTotal, total_amount: grandTotal }
+        : prev
+    );
+  };
+
+  const addItem = async () => {
+    if (!activeQuote?.id) return;
+    if (!itemForm.scope.trim()) {
+      toast.error("Scope/description is required");
+      return;
+    }
+    const qty = itemForm.quantity.trim() ? Number(itemForm.quantity) : null;
+    const price = itemForm.unit_price.trim() ? Number(itemForm.unit_price) : null;
+    const amount = itemForm.amount.trim() ? Number(itemForm.amount) : null;
+    const lineNo = (items[items.length - 1]?.line_no || 0) + 1;
+
+    const { data, error } = await supabase
+      .from("project_quote_items")
+      .insert([
+        {
+          quote_id: activeQuote.id,
+          line_no: lineNo,
+          scope: itemForm.scope.trim(),
+          metric: itemForm.metric.trim() ? itemForm.metric.trim() : null,
+          quantity: qty,
+          unit_price: price,
+          amount: amount,
+        },
+      ])
+      .select("*")
+      .limit(1);
+    if (error) {
+      console.error("Item insert error:", error);
+      toast.error(error.message || "Failed to add item");
+      return;
+    }
+    const next = [...items, ...(data as any[])];
+    setItems(next);
+    resetItemForm();
+    await updateTotals(activeQuote, next);
+    await fetchQuotes();
+  };
+
+  const deleteItem = async (id: number) => {
+    if (!activeQuote?.id) return;
+    if (!confirm("Delete this line item?")) return;
+    const { error } = await supabase.from("project_quote_items").delete().eq("id", id);
+    if (error) {
+      toast.error(error.message || "Failed to delete item");
+      return;
+    }
+    const next = items.filter((x) => x.id !== id);
+    setItems(next);
+    await updateTotals(activeQuote, next);
+    await fetchQuotes();
+  };
+
+  const enableShare = async () => {
+    if (!activeQuote?.id) return;
+    const token = activeQuote.share_token || generateToken();
+    const { error } = await supabase
+      .from("project_quotes")
+      .update({ share_token: token, share_enabled: true })
+      .eq("id", activeQuote.id);
+    if (error) {
+      toast.error(error.message || "Failed to enable sharing");
+      return;
+    }
+    const updated = { ...activeQuote, share_token: token, share_enabled: true };
+    setActiveQuote(updated);
+    toast.success("Share link enabled");
+    await fetchQuotes();
+  };
+
+  const copyShareLink = async () => {
+    if (!activeQuote?.share_token) {
+      toast.error("Enable sharing first");
+      return;
+    }
+    await navigator.clipboard.writeText(shareUrl(activeQuote));
+    toast.success("Link copied");
+  };
+
+  const shareEmail = () => {
+    if (!activeQuote?.share_token) return toast.error("Enable sharing first");
+    const url = shareUrl(activeQuote);
+    const subject = encodeURIComponent(activeQuote.subject || activeQuote.title || "Quotation");
+    const body = encodeURIComponent(`Please find the quotation here:\n${url}`);
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
+  };
+
+  const shareWhatsApp = () => {
+    if (!activeQuote?.share_token) return toast.error("Enable sharing first");
+    const url = shareUrl(activeQuote);
+    const text = encodeURIComponent(`Quotation link: ${url}`);
+    window.open(`https://wa.me/?text=${text}`, "_blank", "noopener,noreferrer");
+  };
+
+  const exportItemsCsv = () => {
+    const csvEscape = (v: any) => {
+      const s = String(v ?? "");
+      const needs = /[",\n\r]/.test(s);
+      const escaped = s.replace(/"/g, '""');
+      return needs ? `"${escaped}"` : escaped;
+    };
+    const header = ["scope", "metric", "quantity", "unit_price", "amount"].join(",");
+    const rows = items.map((it) => [csvEscape(it.scope), csvEscape(it.metric), it.quantity ?? "", it.unit_price ?? "", it.amount ?? ""].join(","));
+    const csv = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `quote-items-${activeQuote?.id || "export"}.csv`;
+    a.click();
+  };
+
+  const importItemsCsv = async (file: File) => {
+    if (!activeQuote?.id) return;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < 2) return toast.error("CSV has no rows");
+    const parseCsvLine = (line: string) => {
+      const out: string[] = [];
+      let cur = "";
+      let inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (inQ) {
+          if (ch === '"' && line[i + 1] === '"') {
+            cur += '"';
+            i++;
+          } else if (ch === '"') {
+            inQ = false;
+          } else {
+            cur += ch;
+          }
+        } else {
+          if (ch === ",") {
+            out.push(cur);
+            cur = "";
+          } else if (ch === '"') {
+            inQ = true;
+          } else {
+            cur += ch;
+          }
+        }
+      }
+      out.push(cur);
+      return out;
+    };
+
+    const header = parseCsvLine(lines[0]).map((h) => h.trim().toLowerCase());
+    const idx = (name: string) => header.indexOf(name);
+    const iScope = idx("scope");
+    if (iScope === -1) return toast.error("CSV must include 'scope' column");
+
+    const payload = lines.slice(1).map((line, n) => {
+      const parts = parseCsvLine(line);
+      const scope = parts[iScope] || "";
+      const metric = idx("metric") !== -1 ? (parts[idx("metric")] || "") : "";
+      const q = idx("quantity") !== -1 ? Number(parts[idx("quantity")] || "") : null;
+      const p = idx("unit_price") !== -1 ? Number(parts[idx("unit_price")] || "") : null;
+      const a = idx("amount") !== -1 ? Number(parts[idx("amount")] || "") : null;
+      return {
+        quote_id: activeQuote.id,
+        line_no: (items.length + n + 1),
+        scope: String(scope || "").trim(),
+        metric: String(metric || "").trim() || null,
+        quantity: Number.isFinite(q) ? q : null,
+        unit_price: Number.isFinite(p) ? p : null,
+        amount: Number.isFinite(a) ? a : null,
+      };
+    }).filter((r) => r.scope);
+
+    const { error } = await supabase.from("project_quote_items").insert(payload);
+    if (error) {
+      toast.error(error.message || "Failed to import items");
+      return;
+    }
+    toast.success(`Imported ${payload.length} items`);
+    await fetchItems(activeQuote.id);
+    await updateTotals(activeQuote, [...items, ...(payload as any)]);
+    await fetchQuotes();
   };
 
   const handleSave = async () => {
@@ -137,8 +447,13 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
       project_id: numericProjectId,
       quote_number: form.quote_number.trim() ? form.quote_number.trim() : null,
       vendor_name: form.vendor_name.trim() ? form.vendor_name.trim() : null,
+      customer_name: form.customer_name.trim() ? form.customer_name.trim() : null,
+      customer_address: form.customer_address.trim() ? form.customer_address.trim() : null,
+      subject: form.subject.trim() ? form.subject.trim() : null,
       title: form.title.trim() ? form.title.trim() : null,
       total_amount: form.total_amount ? Number(form.total_amount) : 0,
+      gst_percent: form.gst_percent ? Number(form.gst_percent) : 18,
+      terms: form.terms.trim() ? form.terms.trim() : null,
       status: form.status,
       issued_date: form.issued_date || null,
       notes: form.notes.trim() ? form.notes.trim() : null,
@@ -223,10 +538,10 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
                 <Plus className="h-4 w-4 mr-2" /> New Quote
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-white">
+            <DialogContent className="bg-white max-h-[85vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editing ? "Edit Quote" : "New Quote"}</DialogTitle>
-                <DialogDescription>Header-level quote details (line items can be added later).</DialogDescription>
+                <DialogDescription>Header details. Add line items in Quote Details.</DialogDescription>
               </DialogHeader>
 
               <div className="grid gap-4 py-2">
@@ -263,6 +578,27 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">Customer Name</label>
+                    <Input value={form.customer_name} onChange={(e) => setForm((p) => ({ ...p, customer_name: e.target.value }))} className="bg-white" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-slate-700">GST %</label>
+                    <Input type="number" value={form.gst_percent} onChange={(e) => setForm((p) => ({ ...p, gst_percent: e.target.value }))} className="bg-white" />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Customer Address</label>
+                  <Textarea value={form.customer_address} onChange={(e) => setForm((p) => ({ ...p, customer_address: e.target.value }))} className="bg-white" />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Subject</label>
+                  <Input value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))} className="bg-white" />
+                </div>
+
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-slate-700">Title</label>
                   <Input value={form.title} onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))} className="bg-white" />
@@ -273,6 +609,11 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
                     <label className="text-sm font-medium text-slate-700">Total Amount</label>
                     <Input type="number" value={form.total_amount} onChange={(e) => setForm((p) => ({ ...p, total_amount: e.target.value }))} className="bg-white" />
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700">Terms & Conditions</label>
+                  <Textarea value={form.terms} onChange={(e) => setForm((p) => ({ ...p, terms: e.target.value }))} className="bg-white" />
                 </div>
 
                 <div className="space-y-2">
@@ -330,6 +671,9 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
                     <TableCell className="text-sm text-slate-700">{q.issued_date ? new Date(q.issued_date).toLocaleDateString() : <span className="text-slate-400">—</span>}</TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button variant="outline" size="sm" onClick={() => openDetails(q)} title="Open details">
+                          <ExternalLink className="h-4 w-4" />
+                        </Button>
                         <Button variant="outline" size="sm" onClick={() => openEdit(q)}>
                           <Pencil className="h-4 w-4" />
                         </Button>
@@ -345,6 +689,222 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="bg-white max-w-5xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Quote Details</DialogTitle>
+            <DialogDescription>Line items (scope / metric / price) + share/send.</DialogDescription>
+          </DialogHeader>
+
+          {activeQuote ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="font-medium text-slate-900">{activeQuote.quote_number || `Quote #${activeQuote.id}`}</div>
+                  <div className="text-xs text-slate-500">{activeQuote.subject || activeQuote.title || "—"}</div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={exportItemsCsv}>Export CSV</Button>
+                  <label className="inline-flex items-center rounded-md border px-3 py-2 text-sm cursor-pointer hover:bg-slate-50">
+                    Import CSV
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) importItemsCsv(f);
+                        e.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  {!activeQuote.share_enabled ? (
+                    <Button onClick={enableShare}>Enable Share Link</Button>
+                  ) : (
+                    <>
+                      <Button variant="outline" onClick={copyShareLink}><Copy className="h-4 w-4 mr-2" /> Copy Link</Button>
+                      <Button variant="outline" onClick={shareEmail}><Mail className="h-4 w-4 mr-2" /> Email</Button>
+                      <Button variant="outline" onClick={shareWhatsApp}>WhatsApp</Button>
+                      <Button
+                        className="bg-blue-600 text-white hover:bg-blue-700"
+                        onClick={async () => {
+                          try {
+                            const url = `/api/quote/share/${activeQuote.share_token}/pdf`;
+                            const response = await fetch(url);
+                            if (!response.ok) {
+                              // Open the share page in new tab for printing
+                              window.open(`/quote/share/${activeQuote.share_token}`, '_blank');
+                              return;
+                            }
+                            const blob = await response.blob();
+                            const blobUrl = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = blobUrl;
+                            a.download = `quote-${activeQuote.quote_number || activeQuote.id}.pdf`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            window.URL.revokeObjectURL(blobUrl);
+                          } catch (error) {
+                            console.error('PDF download failed:', error);
+                            // Open the share page in new tab for printing as fallback
+                            window.open(`/quote/share/${activeQuote.share_token}`, '_blank');
+                          }
+                        }}
+                      >
+                        Download PDF
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {activeQuote.share_enabled && activeQuote.share_token ? (
+                <div className="text-xs text-slate-600">
+                  Share link:{" "}
+                  <a className="text-blue-600 hover:underline" href={shareUrl(activeQuote)} target="_blank" rel="noreferrer">
+                    {shareUrl(activeQuote)}
+                  </a>
+                </div>
+              ) : null}
+
+              <div className="border rounded-md overflow-hidden">
+                {itemsLoading ? (
+                  <div className="p-6 text-sm text-slate-500">Loading items…</div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-14">S No</TableHead>
+                        <TableHead>Scope</TableHead>
+                        <TableHead className="w-28">Metric</TableHead>
+                        <TableHead className="w-24 text-right">Qty</TableHead>
+                        <TableHead className="w-32 text-right">Unit Price</TableHead>
+                        <TableHead className="w-32 text-right">Amount</TableHead>
+                        <TableHead className="w-24 text-right">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={7} className="text-center py-8 text-slate-500">No line items yet.</TableCell>
+                        </TableRow>
+                      ) : (
+                        items.map((it, idx) => {
+                          const qty = it.quantity != null ? Number(it.quantity) : null;
+                          const price = it.unit_price != null ? Number(it.unit_price) : null;
+                          const amount = it.amount != null ? Number(it.amount) : qty != null && price != null ? qty * price : 0;
+                          return (
+                            <TableRow key={it.id}>
+                              <TableCell>{idx + 1}</TableCell>
+                              <TableCell className="whitespace-pre-line">{it.scope}</TableCell>
+                              <TableCell>{it.metric || "—"}</TableCell>
+                              <TableCell className="text-right">{qty != null ? qty : "—"}</TableCell>
+                              <TableCell className="text-right">{price != null ? price : "—"}</TableCell>
+                              <TableCell className="text-right font-medium">{amount.toLocaleString("en-IN")}</TableCell>
+                              <TableCell className="text-right">
+                                <Button variant="outline" size="sm" onClick={() => deleteItem(it.id)}>
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              <div className="rounded-md border p-4 bg-slate-50">
+                <div className="text-sm font-medium text-slate-800 mb-3">Add line item</div>
+                <div className="grid gap-3">
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-slate-600">Scope / Description *</label>
+                    <Textarea
+                      value={itemForm.scope}
+                      onChange={(e) => setItemForm((p) => ({ ...p, scope: e.target.value }))}
+                      placeholder="e.g., Ground Floor Area using Dr. Leakage Products"
+                      className="bg-white"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-slate-600">Metric</label>
+                      <Input
+                        value={itemForm.metric}
+                        onChange={(e) => setItemForm((p) => ({ ...p, metric: e.target.value }))}
+                        placeholder="Sq. Ft / Lumpsum"
+                        className="bg-white"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-slate-600">Qty</label>
+                      <Input
+                        type="number"
+                        value={itemForm.quantity}
+                        onChange={(e) => setItemForm((p) => ({ ...p, quantity: e.target.value }))}
+                        placeholder="e.g., 300"
+                        className="bg-white"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-slate-600">Unit price</label>
+                      <Input
+                        type="number"
+                        value={itemForm.unit_price}
+                        onChange={(e) => setItemForm((p) => ({ ...p, unit_price: e.target.value }))}
+                        placeholder="e.g., 25"
+                        className="bg-white"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-medium text-slate-600">Amount (optional)</label>
+                      <Input
+                        type="number"
+                        value={itemForm.amount}
+                        onChange={(e) => setItemForm((p) => ({ ...p, amount: e.target.value }))}
+                        placeholder="Use for lumpsum"
+                        className="bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={resetItemForm}>Clear</Button>
+                    <Button onClick={addItem} className="bg-blue-600 text-white hover:bg-blue-700">
+                      <Plus className="h-4 w-4 mr-2" /> Add item
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <div className="w-full max-w-sm text-sm space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Subtotal</span>
+                    <span className="font-medium">₹ {(activeQuote.sub_total || 0).toLocaleString("en-IN")}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">GST ({activeQuote.gst_percent ?? 18}%)</span>
+                    <span className="font-medium">₹ {(activeQuote.gst_amount || 0).toLocaleString("en-IN")}</span>
+                  </div>
+                  <div className="flex justify-between border-t pt-2">
+                    <span className="font-semibold">Grand total</span>
+                    <span className="font-bold">₹ {(activeQuote.grand_total || activeQuote.total_amount || 0).toLocaleString("en-IN")}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-slate-500">No quote selected.</div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDetailsOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
