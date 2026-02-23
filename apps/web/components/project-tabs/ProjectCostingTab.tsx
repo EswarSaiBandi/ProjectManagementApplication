@@ -530,9 +530,9 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                 )}
               </div>
             </div>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Cost Tracking Info */}
       <Card className="bg-blue-50 border-blue-200">

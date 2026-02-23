@@ -155,6 +155,11 @@ export default function LeadsPage() {
     setIsOpen(true);
   };
 
+  const openEstimate = (lead: Lead) => {
+    setEstimatingLead(lead);
+    setIsEstimateOpen(true);
+  };
+
   const openConvert = (lead: Lead) => {
     setConverting(lead);
     setConvertForm({
