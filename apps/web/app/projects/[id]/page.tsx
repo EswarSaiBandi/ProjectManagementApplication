@@ -3,7 +3,7 @@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
-    File, Image, StickyNote, ListTodo, Percent, Triangle, FileText, ShoppingBag, Box, Activity, PieChart, Users, Banknote, ClipboardCheck, Sparkles, Info
+    File, Image, StickyNote, ListTodo, Percent, Triangle, FileText, ShoppingBag, Box, Activity, PieChart, Users, Banknote, ClipboardCheck, Sparkles, Info, Package, Recycle, ArrowDownUp, Calculator
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -23,9 +23,13 @@ import InventoryTab from "@/components/project-tabs/InventoryTab";
 import ManpowerTab from "@/components/project-tabs/ManpowerTab";
 import ChecklistsTab from "@/components/project-tabs/ChecklistsTab";
 import DetailsTab from "@/components/project-tabs/DetailsTab";
+import StockAllocationTab from "@/components/project-tabs/StockAllocationTab";
+import ExcessMaterialsTab from "@/components/project-tabs/ExcessMaterialsTab";
+import MaterialMovementsTab from "@/components/project-tabs/MaterialMovementsTab";
+import ProjectCostingTab from "@/components/project-tabs/ProjectCostingTab";
 
 export default function ProjectDetailsPage({ params }: { params: { id: string } }) {
-    const [activeTab, setActiveTab] = useState("financials");
+    const [activeTab, setActiveTab] = useState("project-costing");
     const [project, setProject] = useState<any>({
         name: "Loading...",
         code: "...",
@@ -69,20 +73,24 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
     }
 
     const tabs = [
-        { label: "Files", icon: File, value: "files" },
-        { label: "Moodboard", icon: Image, value: "moodboard" },
-        { label: "Notes", icon: StickyNote, value: "notes" },
+        { label: "Project Costing", icon: Calculator, value: "project-costing" },
+        { label: "Financials", icon: Banknote, value: "financials" },
+        { label: "Material Movements", icon: ArrowDownUp, value: "material-movements" },
+        { label: "Stock Allocation", icon: Package, value: "stock-allocation" },
+        { label: "Excess Materials", icon: Recycle, value: "excess-materials" },
+        { label: "Inventory", icon: Box, value: "inventory" },
+        { label: "Manpower", icon: Users, value: "manpower" },
+        { label: "Activities", icon: Activity, value: "activities" },
+        { label: "Client Progress", icon: PieChart, value: "client-progress" },
         { label: "Tasks", icon: ListTodo, value: "tasks" },
         { label: "Quotes", icon: Percent, value: "quotes" },
         { label: "Orders", icon: Triangle, value: "orders" },
         { label: "Invoices", icon: FileText, value: "invoices" },
         { label: "Purchase Request", icon: ShoppingBag, value: "purchase-request" },
-        { label: "Inventory", icon: Box, value: "inventory" },
-        { label: "Activities", icon: Activity, value: "activities" },
-        { label: "Client Progress", icon: PieChart, value: "client-progress" },
-        { label: "Manpower", icon: Users, value: "manpower" },
-        { label: "Financials", icon: Banknote, value: "financials" },
         { label: "Checklists", icon: ClipboardCheck, value: "checklists" },
+        { label: "Files", icon: File, value: "files" },
+        { label: "Moodboard", icon: Image, value: "moodboard" },
+        { label: "Notes", icon: StickyNote, value: "notes" },
         { label: "StudioAI", icon: Sparkles, value: "studio-ai", special: true },
         { label: "Details", icon: Info, value: "details" },
     ];
@@ -128,39 +136,47 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
 
                 <div className="space-y-6">
                     {/* Project Modules */}
-                    {activeTab === 'files' && <FilesTab projectId={params.id} />}
-                    {activeTab === 'moodboard' && <MoodboardTab projectId={params.id} />}
-                    {activeTab === 'notes' && <NotesTab projectId={params.id} />}
+                    {activeTab === 'project-costing' && <ProjectCostingTab projectId={params.id} />}
+                    {activeTab === 'financials' && <FinancialTab projectId={params.id} />}
+                    {activeTab === 'material-movements' && <MaterialMovementsTab projectId={params.id} />}
+                    {activeTab === 'stock-allocation' && <StockAllocationTab projectId={params.id} />}
+                    {activeTab === 'excess-materials' && <ExcessMaterialsTab projectId={params.id} />}
+                    {activeTab === 'inventory' && <InventoryTab projectId={params.id} />}
+                    {activeTab === 'manpower' && <ManpowerTab projectId={params.id} />}
+                    {activeTab === 'activities' && <ActivitiesTab projectId={params.id} />}
+                    {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} />}
                     {activeTab === 'tasks' && <TasksTab projectId={params.id} />}
                     {activeTab === 'quotes' && <QuotesTab projectId={params.id} />}
                     {activeTab === 'orders' && <OrdersTab projectId={params.id} />}
                     {activeTab === 'invoices' && <InvoicesTab projectId={params.id} />}
                     {activeTab === 'purchase-request' && <PurchaseRequestTab projectId={params.id} />}
-                    {activeTab === 'inventory' && <InventoryTab projectId={params.id} />}
-                    {activeTab === 'manpower' && <ManpowerTab projectId={params.id} />}
                     {activeTab === 'checklists' && <ChecklistsTab projectId={params.id} />}
+                    {activeTab === 'files' && <FilesTab projectId={params.id} />}
+                    {activeTab === 'moodboard' && <MoodboardTab projectId={params.id} />}
+                    {activeTab === 'notes' && <NotesTab projectId={params.id} />}
                     {activeTab === 'details' && <DetailsTab projectId={params.id} />}
-
-                    {/* Financials Tab Content */}
-                    {activeTab === 'financials' && <FinancialTab projectId={params.id} />}
 
                     {/* Placeholder for other tabs (Coming Soon) */}
                     {tabs.filter(t =>
                         ![
-                            'files',
-                            'moodboard',
-                            'notes',
+                            'project-costing',
+                            'financials',
+                            'material-movements',
+                            'stock-allocation',
+                            'excess-materials',
+                            'inventory',
+                            'manpower',
+                            'activities',
+                            'client-progress',
                             'tasks',
                             'quotes',
                             'orders',
                             'invoices',
                             'purchase-request',
-                            'inventory',
-                            'financials',
-                            'activities',
-                            'client-progress',
-                            'manpower',
                             'checklists',
+                            'files',
+                            'moodboard',
+                            'notes',
                             'details'
                         ].includes(t.value)
                     ).map(tab => (

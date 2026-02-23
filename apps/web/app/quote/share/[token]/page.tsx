@@ -49,7 +49,7 @@ export default async function QuoteSharePage({ params }: { params: { token: stri
             <div className="max-w-4xl mx-auto p-6 md:p-10">
                 <div className="flex items-center justify-between gap-4 mb-6 print:hidden">
                     <div className="text-sm text-slate-500">Quote view</div>
-                    <QuoteShareActions pdfUrl={`/api/quote/share/${encodeURIComponent(token)}/pdf`} />
+                    <QuoteShareActions />
                 </div>
 
                 <div className="border rounded-lg p-6 md:p-8">

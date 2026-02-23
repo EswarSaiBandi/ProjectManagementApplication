@@ -728,32 +728,12 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
                       <Button variant="outline" onClick={shareWhatsApp}>WhatsApp</Button>
                       <Button
                         className="bg-blue-600 text-white hover:bg-blue-700"
-                        onClick={async () => {
-                          try {
-                            const url = `/api/quote/share/${activeQuote.share_token}/pdf`;
-                            const response = await fetch(url);
-                            if (!response.ok) {
-                              // Open the share page in new tab for printing
-                              window.open(`/quote/share/${activeQuote.share_token}`, '_blank');
-                              return;
-                            }
-                            const blob = await response.blob();
-                            const blobUrl = window.URL.createObjectURL(blob);
-                            const a = document.createElement('a');
-                            a.href = blobUrl;
-                            a.download = `quote-${activeQuote.quote_number || activeQuote.id}.pdf`;
-                            document.body.appendChild(a);
-                            a.click();
-                            document.body.removeChild(a);
-                            window.URL.revokeObjectURL(blobUrl);
-                          } catch (error) {
-                            console.error('PDF download failed:', error);
-                            // Open the share page in new tab for printing as fallback
-                            window.open(`/quote/share/${activeQuote.share_token}`, '_blank');
-                          }
+                        onClick={() => {
+                          // Open the share page in new tab for printing/downloading
+                          window.open(`/quote/share/${activeQuote.share_token}`, '_blank');
                         }}
                       >
-                        Download PDF
+                        View & Download
                       </Button>
                     </>
                   )}

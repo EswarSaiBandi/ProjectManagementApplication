@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo, PieChart, Layers, Settings } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo, PieChart, Layers, Settings, Target } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 const NAV_ITEMS = [
     { label: 'Dashboard', icon: LayoutDashboard, href: '/dashboard' },
+    { label: 'Leads', icon: Target, href: '/leads' },
     { label: 'Projects', icon: FolderKanban, href: '/projects' },
     { label: 'Schedule', icon: CalendarDays, href: '/schedule' },
     { label: 'Team', icon: Users, href: '/team' },
