@@ -14,4 +14,4 @@ export default function MovementLogsPage() {
       </div>
     </div>
   );
-}
+} 
