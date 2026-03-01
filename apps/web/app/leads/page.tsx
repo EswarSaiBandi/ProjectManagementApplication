@@ -5,7 +5,7 @@ import { Target } from 'lucide-react';
 
 export default function LeadsPage() {
   return (
-    <div className="p-8 bg-slate-50 min-h-screen">
+    <div className="p-6">
       <div className="max-w-7xl mx-auto">
         <Card className="bg-white shadow-sm">
           <CardHeader className="border-b bg-slate-50">

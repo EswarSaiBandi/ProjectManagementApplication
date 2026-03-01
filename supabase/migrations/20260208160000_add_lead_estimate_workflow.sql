@@ -365,11 +365,11 @@ add column if not exists external_requirements text;
 
 -- View: Estimates with Lead details
 create or replace view public.estimates_with_leads as
-select 
+select
   e.*,
   l.client_name,
-  l.email as client_email,
-  l.phone as client_phone,
+  l.client_email,
+  l.client_phone,
   l.project_type,
   l.source as lead_source,
   l.priority,

@@ -19,11 +19,11 @@ import QuotesTab from "@/components/project-tabs/QuotesTab";
 import OrdersTab from "@/components/project-tabs/OrdersTab";
 import InvoicesTab from "@/components/project-tabs/InvoicesTab";
 import MaterialRequestTab from "@/components/project-tabs/MaterialRequestTab";
-import InventoryTab from "@/components/project-tabs/InventoryTab";
+import ProjectInventoryTab from "@/components/project-tabs/ProjectInventoryTab";
+import StockUsedTab from "@/components/project-tabs/StockUsedTab";
 import ManpowerTab from "@/components/project-tabs/ManpowerTab";
 import ChecklistsTab from "@/components/project-tabs/ChecklistsTab";
 import DetailsTab from "@/components/project-tabs/DetailsTab";
-import StockAllocationTab from "@/components/project-tabs/StockAllocationTab";
 import ExcessMaterialsTab from "@/components/project-tabs/ExcessMaterialsTab";
 import MaterialMovementsTab from "@/components/project-tabs/MaterialMovementsTab";
 import ProjectCostingTab from "@/components/project-tabs/ProjectCostingTab";
@@ -75,10 +75,10 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
     const tabs = [
         { label: "Project Costing", icon: Calculator, value: "project-costing" },
         { label: "Financials", icon: Banknote, value: "financials" },
+        { label: "Inventory", icon: Package, value: "inventory" },
         { label: "Material Movements", icon: ArrowDownUp, value: "material-movements" },
-        { label: "Stock Allocation", icon: Package, value: "stock-allocation" },
+        { label: "Stock Used", icon: Box, value: "stock-used" },
         { label: "Excess Materials", icon: Recycle, value: "excess-materials" },
-        { label: "Inventory", icon: Box, value: "inventory" },
         { label: "Manpower", icon: Users, value: "manpower" },
         { label: "Activities", icon: Activity, value: "activities" },
         { label: "Client Progress", icon: PieChart, value: "client-progress" },
@@ -138,10 +138,10 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                     {/* Project Modules */}
                     {activeTab === 'project-costing' && <ProjectCostingTab projectId={params.id} />}
                     {activeTab === 'financials' && <FinancialTab projectId={params.id} />}
+                    {activeTab === 'inventory' && <ProjectInventoryTab projectId={params.id} />}
                     {activeTab === 'material-movements' && <MaterialMovementsTab projectId={params.id} />}
-                    {activeTab === 'stock-allocation' && <StockAllocationTab projectId={params.id} />}
+                    {activeTab === 'stock-used' && <StockUsedTab projectId={params.id} />}
                     {activeTab === 'excess-materials' && <ExcessMaterialsTab projectId={params.id} />}
-                    {activeTab === 'inventory' && <InventoryTab projectId={params.id} />}
                     {activeTab === 'manpower' && <ManpowerTab projectId={params.id} />}
                     {activeTab === 'activities' && <ActivitiesTab projectId={params.id} />}
                     {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} />}
@@ -161,10 +161,10 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                         ![
                             'project-costing',
                             'financials',
-                            'material-movements',
-                            'stock-allocation',
-                            'excess-materials',
                             'inventory',
+                            'material-movements',
+                            'stock-used',
+                            'excess-materials',
                             'manpower',
                             'activities',
                             'client-progress',

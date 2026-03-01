@@ -1,6 +1,10 @@
 -- Enhanced Lead to Project Information Flow
 -- Ensure comprehensive data transfer and bidirectional linking
 
+-- Add conversion tracking to leads
+alter table public.leads
+add column if not exists conversion_date timestamp with time zone;
+
 -- Add lead reference fields to projects table
 alter table public.projects
 add column if not exists source_lead_id bigint references public.leads(lead_id),
@@ -13,13 +17,15 @@ add column if not exists project_requirements text;
 
 -- Add project reference to orders
 alter table public.project_orders
-add column if not exists estimate_id bigint references public.estimates(estimate_id);
+add column if not exists estimate_id bigint references public.estimates(estimate_id),
+add column if not exists converted_from_lead_id bigint references public.leads(lead_id);
 
 -- Add project tracking to estimates
 alter table public.estimates
-add column if not exists converted_to_project_id bigint references public.projects(project_id),
-add column if not exists converted_to_order_id bigint references public.project_orders(order_id),
-add column if not exists converted_to_quote_id bigint references public.quotes(quote_id);
+add column if not exists converted_project_id bigint references public.projects(project_id),
+add column if not exists converted_order_id bigint references public.project_orders(id),
+add column if not exists converted_quote_id bigint references public.project_quotes(id),
+add column if not exists converted_at timestamp with time zone;
 
 -- Enhanced conversion function with complete information flow
 create or replace function public.auto_convert_estimate_to_order_enhanced()
@@ -185,14 +191,14 @@ begin
     update public.leads
     set 
       status = 'Realized',
-      converted_to_order_id = v_order_id,
+      converted_order_id = v_order_id,
       conversion_date = now()
     where lead_id = new.lead_id;
     
     -- Update estimate with conversion references
-    new.converted_to_project_id := v_project_id;
-    new.converted_to_order_id := v_order_id;
-    new.converted_to_quote_id := v_quote_id;
+    new.converted_project_id := v_project_id;
+    new.converted_order_id := v_order_id;
+    new.converted_quote_id := v_quote_id;
     
     -- Log the conversion
     new.approval_notes := coalesce(new.approval_notes, '') || 
@@ -231,12 +237,12 @@ select
   p.project_name,
   p.status as project_status,
   p.start_date as project_start_date,
-  
-  po.order_id,
+
+  po.id as order_id,
   po.order_number,
   po.status as order_status,
-  
-  q.quote_id,
+
+  q.id as quote_id,
   q.quote_number,
   q.status as quote_status,
   

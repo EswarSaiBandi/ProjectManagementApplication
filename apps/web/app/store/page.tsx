@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/lib/supabase';
-import { Plus, Edit, Package, ClipboardList, TrendingUp, Bell, Check, X, AlertCircle } from 'lucide-react';
+import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X, Edit } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Material {
@@ -76,8 +76,7 @@ interface MaterialReturn {
   variant_name?: string;
 }
 
-export default function StoreInventoryPage() {
-  
+export default function StorePage() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [inventory, setInventory] = useState<StoreInventory[]>([]);
@@ -174,7 +173,6 @@ export default function StoreInventoryPage() {
         materials_master!inner(material_name, metric)
       `)
       .eq('status', 'Pending')
-      .eq('request_source', 'Store')
       .order('created_at', { ascending: false });
     
     if (error) {
@@ -225,18 +223,19 @@ export default function StoreInventoryPage() {
         toast.error('Please select material and variant');
         return;
       }
-      if (!inventoryForm.number_of_units || parseInt(inventoryForm.number_of_units) <= 0) {
+      if (!inventoryForm.number_of_units || parseFloat(inventoryForm.number_of_units) <= 0) {
         toast.error('Please enter valid number of units');
         return;
       }
 
       const variant = variants.find(v => v.variant_id === inventoryForm.variant_id);
-      const totalQuantity = variant ? parseFloat(inventoryForm.number_of_units) * variant.quantity_per_unit : 0;
+      const units = parseFloat(inventoryForm.number_of_units);
+      const totalQuantity = variant ? units * variant.quantity_per_unit : 0;
 
       const payload = {
         material_id: inventoryForm.material_id,
         variant_id: inventoryForm.variant_id,
-        number_of_units: parseInt(inventoryForm.number_of_units),
+        number_of_units: units,
         total_quantity: totalQuantity,
         location: inventoryForm.location.trim() || null,
         notes: inventoryForm.notes.trim() || null,
@@ -244,7 +243,6 @@ export default function StoreInventoryPage() {
       };
 
       if (inventoryForm.inventory_id) {
-        // Update
         const { error } = await supabase
           .from('store_inventory')
           .update(payload)
@@ -253,7 +251,6 @@ export default function StoreInventoryPage() {
         if (error) throw error;
         toast.success('Inventory updated successfully');
       } else {
-        // Insert or upsert
         const { error } = await supabase
           .from('store_inventory')
           .upsert([payload], {
@@ -276,7 +273,6 @@ export default function StoreInventoryPage() {
     setSelectedRequest(request);
     setApprovalNotes('');
     
-    // Find available variants for this material
     const availableVariants = inventory.filter(inv => inv.material_id === request.material_id);
     setFulfillmentUnits(availableVariants.map(inv => ({ variant_id: inv.variant_id, units: 0 })));
     
@@ -297,7 +293,6 @@ export default function StoreInventoryPage() {
         return;
       }
 
-      // Update request status
       const { error: reqError } = await supabase
         .from('material_requests')
         .update({
@@ -310,7 +305,6 @@ export default function StoreInventoryPage() {
       
       if (reqError) throw reqError;
 
-      // Insert fulfillment items
       for (const fu of fulfillmentUnits) {
         if (fu.units > 0) {
           const inv = inventory.find(i => i.variant_id === fu.variant_id);
@@ -325,7 +319,6 @@ export default function StoreInventoryPage() {
               quantity_issued: fu.units * inv.quantity_per_unit!
             });
 
-          // Reduce store inventory
           await supabase
             .from('store_inventory')
             .update({
@@ -337,7 +330,6 @@ export default function StoreInventoryPage() {
         }
       }
 
-      // Mark as fulfilled
       await supabase
         .from('material_requests')
         .update({
@@ -471,7 +463,7 @@ export default function StoreInventoryPage() {
   }
 
   return (
-    <div className="p-8 bg-slate-50 min-h-screen">
+    <div className="space-y-6 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -562,18 +554,23 @@ export default function StoreInventoryPage() {
                         </div>
 
                         <div className="space-y-2">
-                          <Label>Number of Units *</Label>
+                          <Label>Number of Units * (decimal supported, e.g., 0.5, 2.75)</Label>
                           <Input
                             type="number"
+                            step="0.01"
+                            min="0.01"
                             value={inventoryForm.number_of_units}
                             onChange={(e) => setInventoryForm({ ...inventoryForm, number_of_units: e.target.value })}
-                            placeholder="e.g., 10"
+                            placeholder="e.g., 10 or 5.5"
                             className="bg-white"
                           />
                           {inventoryForm.variant_id && inventoryForm.number_of_units && (
-                            <p className="text-xs text-slate-600">
-                              Total: {(parseFloat(inventoryForm.number_of_units) * (variants.find(v => v.variant_id === inventoryForm.variant_id)?.quantity_per_unit || 0)).toFixed(2)} {materials.find(m => m.material_id === inventoryForm.material_id)?.metric}
-                            </p>
+                            <div className="text-sm bg-blue-50 border border-blue-200 rounded p-2">
+                              <strong>Total Quantity:</strong> {' '}
+                              <span className="font-bold text-blue-700">
+                                {(parseFloat(inventoryForm.number_of_units) * (variants.find(v => v.variant_id === inventoryForm.variant_id)?.quantity_per_unit || 0)).toFixed(2)} {materials.find(m => m.material_id === inventoryForm.material_id)?.metric}
+                              </span>
+                            </div>
                           )}
                         </div>
 
@@ -689,6 +686,11 @@ export default function StoreInventoryPage() {
                             <div className="flex items-center gap-2">
                               <Badge variant="outline" className="font-mono">{req.request_number}</Badge>
                               <Badge className={
+                                req.request_source === 'Store' ? 'bg-blue-100 text-blue-700' : 'bg-teal-100 text-teal-700'
+                              }>
+                                {req.request_source}
+                              </Badge>
+                              <Badge className={
                                 req.priority === 'Urgent' ? 'bg-red-100 text-red-700' :
                                 req.priority === 'High' ? 'bg-orange-100 text-orange-700' :
                                 'bg-slate-100 text-slate-700'
@@ -713,7 +715,7 @@ export default function StoreInventoryPage() {
                             size="sm"
                             className="bg-green-600 hover:bg-green-700"
                           >
-                            Review & Fulfill
+                            {req.request_source === 'Store' ? 'Review & Fulfill' : 'Acknowledge'}
                           </Button>
                         </div>
                       </div>
@@ -814,11 +816,12 @@ export default function StoreInventoryPage() {
                         <div className="flex items-center gap-2">
                           <Input
                             type="number"
+                            step="0.01"
                             min="0"
                             max={inv.number_of_units}
-                            value={currentFulfillment?.units || 0}
+                            value={currentFulfillment?.units || ''}
                             onChange={(e) => {
-                              const newUnits = parseInt(e.target.value) || 0;
+                              const newUnits = parseFloat(e.target.value) || 0;
                               setFulfillmentUnits(prev =>
                                 prev.map(fu =>
                                   fu.variant_id === inv.variant_id
@@ -827,7 +830,8 @@ export default function StoreInventoryPage() {
                                 )
                               );
                             }}
-                            className="w-20 bg-white"
+                            className="w-24 bg-white"
+                            placeholder="0.5"
                           />
                           <span className="text-sm text-slate-600">units</span>
                         </div>

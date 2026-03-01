@@ -1,7 +1,7 @@
 import { Sidebar } from '@/components/dashboard/Sidebar';
 import { Header } from '@/components/dashboard/Header';
 
-export default function MaterialsLayout({ children }: { children: React.ReactNode }) {
+export default function StoreLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen bg-gray-50">
       <Sidebar />

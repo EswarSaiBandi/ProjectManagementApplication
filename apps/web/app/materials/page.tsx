@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { supabase } from '@/lib/supabase';
-import { Plus, Edit, Trash2, Package, Layers } from 'lucide-react';
+import { Plus, Edit, Trash2, Package, Layers, Search, Filter } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Material {
@@ -39,6 +39,11 @@ export default function MaterialsManagementPage() {
   const [variants, setVariants] = useState<Variant[]>([]);
   const [loading, setLoading] = useState(true);
   
+  const [searchQuery, setSearchQuery] = useState('');
+  const [metricFilter, setMetricFilter] = useState('All');
+  const [materialFilter, setMaterialFilter] = useState('All');
+  const [activeFilter, setActiveFilter] = useState('All');
+  
   const [isMaterialDialogOpen, setIsMaterialDialogOpen] = useState(false);
   const [isVariantDialogOpen, setIsVariantDialogOpen] = useState(false);
   
@@ -63,6 +68,10 @@ export default function MaterialsManagementPage() {
 
   const fetchMaterials = async () => {
     try {
+      if (!supabase) {
+        throw new Error('Supabase client not initialized. Please check your environment variables.');
+      }
+      
       const { data, error } = await supabase
         .from('materials_master')
         .select('*')
@@ -79,6 +88,10 @@ export default function MaterialsManagementPage() {
 
   const fetchVariants = async () => {
     try {
+      if (!supabase) {
+        throw new Error('Supabase client not initialized. Please check your environment variables.');
+      }
+      
       const { data, error } = await supabase
         .from('material_variants')
         .select(`
@@ -246,6 +259,36 @@ export default function MaterialsManagementPage() {
     }
   };
 
+  const toggleMaterialStatus = async (materialId: number, currentStatus: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('materials_master')
+        .update({ is_active: !currentStatus })
+        .eq('material_id', materialId);
+      
+      if (error) throw error;
+      toast.success(`Material ${!currentStatus ? 'activated' : 'deactivated'} successfully`);
+      fetchMaterials();
+    } catch (error: any) {
+      toast.error('Failed to update material status: ' + error.message);
+    }
+  };
+
+  const toggleVariantStatus = async (variantId: number, currentStatus: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('material_variants')
+        .update({ is_active: !currentStatus })
+        .eq('variant_id', variantId);
+      
+      if (error) throw error;
+      toast.success(`Variant ${!currentStatus ? 'activated' : 'deactivated'} successfully`);
+      fetchVariants();
+    } catch (error: any) {
+      toast.error('Failed to update variant status: ' + error.message);
+    }
+  };
+
   const resetMaterialForm = () => {
     setMaterialForm({
       material_id: null,
@@ -274,6 +317,27 @@ export default function MaterialsManagementPage() {
     setIsVariantDialogOpen(true);
   };
 
+  const filteredMaterials = materials.filter(material => {
+    const matchesSearch = material.material_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         (material.description && material.description.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesMetric = metricFilter === 'All' || material.metric === metricFilter;
+    const matchesActive = activeFilter === 'All' || 
+                         (activeFilter === 'Active' && material.is_active) ||
+                         (activeFilter === 'Inactive' && !material.is_active);
+    
+    return matchesSearch && matchesMetric && matchesActive;
+  });
+
+  const filteredVariants = variants.filter(variant => {
+    const matchesSearch = variant.variant_name.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesMaterial = materialFilter === 'All' || variant.material_id === parseInt(materialFilter);
+    const matchesActive = activeFilter === 'All' || 
+                         (activeFilter === 'Active' && variant.is_active) ||
+                         (activeFilter === 'Inactive' && !variant.is_active);
+    
+    return matchesSearch && matchesMaterial && matchesActive;
+  });
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -283,7 +347,7 @@ export default function MaterialsManagementPage() {
   }
 
   return (
-    <div className="p-8 bg-slate-50 min-h-screen">
+    <div className="space-y-6 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -291,6 +355,92 @@ export default function MaterialsManagementPage() {
             <p className="text-slate-600 mt-1">Manage materials and their quantity variants</p>
           </div>
         </div>
+
+        {/* Filters */}
+        <Card className="bg-white shadow-sm">
+          <CardContent className="p-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Search</Label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <Input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search materials or variants..."
+                    className="pl-9 bg-white"
+                  />
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Metric</Label>
+                <Select value={metricFilter} onValueChange={setMetricFilter}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="All">All Metrics</SelectItem>
+                    {METRICS.map(m => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Material (Variants)</Label>
+                <Select value={materialFilter} onValueChange={setMaterialFilter}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="All">All Materials</SelectItem>
+                    {materials.map(m => (
+                      <SelectItem key={m.material_id} value={m.material_id.toString()}>
+                        {m.material_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">Status</Label>
+                <Select value={activeFilter} onValueChange={setActiveFilter}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="All">All Status</SelectItem>
+                    <SelectItem value="Active">Active Only</SelectItem>
+                    <SelectItem value="Inactive">Inactive Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            
+            <div className="flex items-center justify-between mt-3 pt-3 border-t">
+              <div className="text-sm text-slate-600">
+                Showing <span className="font-semibold">{filteredMaterials.length}</span> materials, 
+                <span className="font-semibold ml-1">{filteredVariants.length}</span> variants
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearchQuery('');
+                  setMetricFilter('All');
+                  setMaterialFilter('All');
+                  setActiveFilter('All');
+                }}
+                className="text-blue-600 hover:text-blue-700"
+              >
+                Clear Filters
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Materials Card */}
@@ -368,21 +518,24 @@ export default function MaterialsManagementPage() {
             </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y max-h-[600px] overflow-y-auto">
-                {materials.length === 0 ? (
+                {filteredMaterials.length === 0 ? (
                   <div className="p-8 text-center text-slate-500">
-                    No materials yet. Create one to get started.
+                    {materials.length === 0 ? 'No materials yet. Create one to get started.' : 'No materials match your filters.'}
                   </div>
                 ) : (
-                  materials.map((material) => (
+                  filteredMaterials.map((material) => (
                     <div key={material.material_id} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
                           <div className="flex items-center gap-2">
                             <h3 className="font-semibold text-slate-900">{material.material_name}</h3>
                             <Badge variant="outline" className="text-xs">{material.metric}</Badge>
-                            {!material.is_active && (
-                              <Badge variant="secondary" className="text-xs">Inactive</Badge>
-                            )}
+                            <Badge 
+                              variant={material.is_active ? "default" : "secondary"} 
+                              className={`text-xs ${material.is_active ? 'bg-green-100 text-green-700 border-green-300' : 'bg-gray-100 text-gray-600 border-gray-300'}`}
+                            >
+                              {material.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
                           </div>
                           {material.description && (
                             <p className="text-sm text-slate-600 mt-1">{material.description}</p>
@@ -392,6 +545,18 @@ export default function MaterialsManagementPage() {
                           </div>
                         </div>
                         <div className="flex gap-1">
+                          <Button
+                            onClick={() => toggleMaterialStatus(material.material_id, material.is_active)}
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0"
+                            title={material.is_active ? 'Deactivate material' : 'Activate material'}
+                          >
+                            {material.is_active ? 
+                              <span className="text-orange-600">⏸</span> : 
+                              <span className="text-green-600">▶</span>
+                            }
+                          </Button>
                           <Button
                             onClick={() => handleEditMaterial(material)}
                             size="sm"
@@ -501,12 +666,12 @@ export default function MaterialsManagementPage() {
             </CardHeader>
             <CardContent className="p-0">
               <div className="divide-y max-h-[600px] overflow-y-auto">
-                {variants.length === 0 ? (
+                {filteredVariants.length === 0 ? (
                   <div className="p-8 text-center text-slate-500">
-                    No variants yet. Create variants for your materials.
+                    {variants.length === 0 ? 'No variants yet. Create variants for your materials.' : 'No variants match your filters.'}
                   </div>
                 ) : (
-                  variants.map((variant) => (
+                  filteredVariants.map((variant) => (
                     <div key={variant.variant_id} className="p-4 hover:bg-slate-50 transition-colors">
                       <div className="flex items-start justify-between">
                         <div className="flex-1">
@@ -518,12 +683,27 @@ export default function MaterialsManagementPage() {
                             <Badge variant="secondary" className="text-xs">
                               {variant.quantity_per_unit} {materials.find(m => m.material_id === variant.material_id)?.metric}
                             </Badge>
-                            {!variant.is_active && (
-                              <Badge variant="secondary" className="text-xs">Inactive</Badge>
-                            )}
+                            <Badge 
+                              variant={variant.is_active ? "default" : "secondary"} 
+                              className={`text-xs ${variant.is_active ? 'bg-green-100 text-green-700 border-green-300' : 'bg-gray-100 text-gray-600 border-gray-300'}`}
+                            >
+                              {variant.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
                           </div>
                         </div>
                         <div className="flex gap-1">
+                          <Button
+                            onClick={() => toggleVariantStatus(variant.variant_id, variant.is_active)}
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 w-8 p-0"
+                            title={variant.is_active ? 'Deactivate variant' : 'Activate variant'}
+                          >
+                            {variant.is_active ? 
+                              <span className="text-orange-600">⏸</span> : 
+                              <span className="text-green-600">▶</span>
+                            }
+                          </Button>
                           <Button
                             onClick={() => handleEditVariant(variant)}
                             size="sm"

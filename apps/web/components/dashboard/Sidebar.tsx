@@ -14,8 +14,6 @@ const NAV_ITEMS = [
     { label: 'Team', icon: Users, href: '/team' },
     { label: 'Tasks', icon: ListTodo, href: '/tasks' },
     { label: 'Reports', icon: PieChart, href: '/reports' },
-    { label: 'Store Inventory', icon: Warehouse, href: '/store-inventory' },
-    { label: 'Materials', icon: Package, href: '/materials' },
     { label: 'Inventory', icon: Layers, href: '/inventory' },
 ];
 

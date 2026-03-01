@@ -1,11 +1,12 @@
 {
-    "name": "backend",
+    "name": "project-management-monorepo",
     "version": "0.0.1",
     "private": true,
     "scripts": {
-        "build": "tsc",
-        "start": "node dist/index.js",
-        "dev": "ts-node-dev src/index.ts"
+        "dev": "cd apps/web && npm run dev",
+        "build": "cd apps/web && npm run build",
+        "start": "cd apps/web && npm run start",
+        "lint": "cd apps/web && npm run lint"
     },
     "dependencies": {
         "@supabase/supabase-js": "^2.87.1",

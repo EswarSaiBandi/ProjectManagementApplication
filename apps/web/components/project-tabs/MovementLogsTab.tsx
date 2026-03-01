@@ -100,6 +100,8 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
         return <RefreshCw className="h-4 w-4 text-purple-600" />;
       case 'Local Procurement':
         return <Package className="h-4 w-4 text-teal-600" />;
+      case 'Stock Used':
+        return <Package className="h-4 w-4 text-amber-600" />;
       default:
         return <ArrowDownUp className="h-4 w-4 text-slate-600" />;
     }
@@ -119,6 +121,8 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
         return 'bg-purple-100 text-purple-700';
       case 'Local Procurement':
         return 'bg-teal-100 text-teal-700';
+      case 'Stock Used':
+        return 'bg-amber-100 text-amber-700';
       default:
         return 'bg-slate-100 text-slate-700';
     }
@@ -154,6 +158,7 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
                   <SelectItem value="Project Out">Project Out</SelectItem>
                   <SelectItem value="Return to Store">Return to Store</SelectItem>
                   <SelectItem value="Local Procurement">Local Procurement</SelectItem>
+                  <SelectItem value="Stock Used">Stock Used</SelectItem>
                 </SelectContent>
               </Select>
               <Badge variant="outline" className="px-3 py-1">
