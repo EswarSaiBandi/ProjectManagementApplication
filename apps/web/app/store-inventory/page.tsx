@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { createClient } from '@/lib/supabase/client';
+import { supabase } from '@/lib/supabase';
 import { Plus, Edit, Package, ClipboardList, TrendingUp, Bell, Check, X, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -77,7 +77,6 @@ interface MaterialReturn {
 }
 
 export default function StoreInventoryPage() {
-  const supabase = createClient();
   
   const [materials, setMaterials] = useState<Material[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);

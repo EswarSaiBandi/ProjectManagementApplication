@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { createClient } from '@/lib/supabase/client';
+import { supabase } from '@/lib/supabase';
 import { ArrowDownUp, ArrowDown, ArrowUp, RefreshCw, Package } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -27,7 +27,6 @@ interface MovementLog {
 }
 
 export default function MovementLogsTab({ projectId }: { projectId?: string }) {
-  const supabase = createClient();
   
   const [logs, setLogs] = useState<MovementLog[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<MovementLog[]>([]);

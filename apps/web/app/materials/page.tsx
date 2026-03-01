@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { createClient } from '@/lib/supabase/client';
+import { supabase } from '@/lib/supabase';
 import { Plus, Edit, Trash2, Package, Layers } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -34,7 +34,6 @@ interface Variant {
 const METRICS = ['Litres', 'Kgs', 'Tonnes', 'Sqft', 'Metres', 'Units', 'Pieces', 'Boxes', 'Bags'];
 
 export default function MaterialsManagementPage() {
-  const supabase = createClient();
   
   const [materials, setMaterials] = useState<Material[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);

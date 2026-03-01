@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { createClient } from '@/lib/supabase/client';
+import { supabase } from '@/lib/supabase';
 import { Plus, Package, TrendingDown, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -53,7 +53,6 @@ interface MaterialReturn {
 }
 
 export default function MaterialRequestTab({ projectId }: { projectId: string }) {
-  const supabase = createClient();
   
   const [materials, setMaterials] = useState<Material[]>([]);
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
