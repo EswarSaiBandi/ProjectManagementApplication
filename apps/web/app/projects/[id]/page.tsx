@@ -18,7 +18,7 @@ import TasksTab from "@/components/project-tabs/TasksTab";
 import QuotesTab from "@/components/project-tabs/QuotesTab";
 import OrdersTab from "@/components/project-tabs/OrdersTab";
 import InvoicesTab from "@/components/project-tabs/InvoicesTab";
-import PurchaseRequestTab from "@/components/project-tabs/PurchaseRequestTab";
+import MaterialRequestTab from "@/components/project-tabs/MaterialRequestTab";
 import InventoryTab from "@/components/project-tabs/InventoryTab";
 import ManpowerTab from "@/components/project-tabs/ManpowerTab";
 import ChecklistsTab from "@/components/project-tabs/ChecklistsTab";
@@ -86,7 +86,7 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
         { label: "Quotes", icon: Percent, value: "quotes" },
         { label: "Orders", icon: Triangle, value: "orders" },
         { label: "Invoices", icon: FileText, value: "invoices" },
-        { label: "Purchase Request", icon: ShoppingBag, value: "purchase-request" },
+        { label: "Material Request", icon: ShoppingBag, value: "purchase-request" },
         { label: "Checklists", icon: ClipboardCheck, value: "checklists" },
         { label: "Files", icon: File, value: "files" },
         { label: "Moodboard", icon: Image, value: "moodboard" },
@@ -149,7 +149,7 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                     {activeTab === 'quotes' && <QuotesTab projectId={params.id} />}
                     {activeTab === 'orders' && <OrdersTab projectId={params.id} />}
                     {activeTab === 'invoices' && <InvoicesTab projectId={params.id} />}
-                    {activeTab === 'purchase-request' && <PurchaseRequestTab projectId={params.id} />}
+                    {activeTab === 'purchase-request' && <MaterialRequestTab projectId={params.id} />}
                     {activeTab === 'checklists' && <ChecklistsTab projectId={params.id} />}
                     {activeTab === 'files' && <FilesTab projectId={params.id} />}
                     {activeTab === 'moodboard' && <MoodboardTab projectId={params.id} />}

@@ -46,6 +46,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [budgetEntries, setBudgetEntries] = useState<BudgetEntry[]>([]);
+  const [costCategories, setCostCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -76,6 +77,21 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     setLoading(false);
   };
 
+  const fetchCostCategories = async () => {
+    const { data, error } = await supabase
+      .from('dynamic_field_options')
+      .select('option_value')
+      .eq('field_type', 'cost_category')
+      .eq('is_active', true)
+      .order('display_order');
+
+    if (!error && data) {
+      setCostCategories(data.map(d => d.option_value));
+    } else {
+      setCostCategories(['Material', 'Labor', 'Equipment', 'Overhead', 'Other']);
+    }
+  };
+
   const fetchBudgetEntries = async () => {
     if (!Number.isFinite(numericProjectId)) return;
 
@@ -93,6 +109,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   useEffect(() => {
     fetchCostingSummary();
     fetchBudgetEntries();
+    fetchCostCategories();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numericProjectId]);
 
@@ -301,11 +318,9 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-white">
-                          <SelectItem value="Material">Material</SelectItem>
-                          <SelectItem value="Labor">Labor</SelectItem>
-                          <SelectItem value="Equipment">Equipment</SelectItem>
-                          <SelectItem value="Overhead">Overhead</SelectItem>
-                          <SelectItem value="Other">Other</SelectItem>
+                          {costCategories.map(category => (
+                            <SelectItem key={category} value={category}>{category}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>

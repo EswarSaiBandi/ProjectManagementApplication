@@ -249,7 +249,7 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
       return;
     }
 
-    toast.success(`Purchase Request #${prId} created`);
+    toast.success(`Material Request #${prId} created`);
     setIsCreateOpen(false);
     resetCreate();
     fetchPRs();
@@ -319,7 +319,7 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
-            <ShoppingBag className="h-5 w-5 text-slate-500" /> Purchase Requests
+            <ShoppingBag className="h-5 w-5 text-slate-500" /> Material Requests
           </CardTitle>
 
           <Dialog
@@ -336,7 +336,7 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
             </DialogTrigger>
             <DialogContent className="bg-white max-w-3xl">
               <DialogHeader>
-                <DialogTitle>Create Purchase Request</DialogTitle>
+                <DialogTitle>Create Material Request</DialogTitle>
                 <DialogDescription>Select items from inventory and add requested quantities.</DialogDescription>
               </DialogHeader>
 
@@ -543,7 +543,7 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
       >
         <DialogContent className="bg-white max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Purchase Request {activePr ? `#${activePr.pr_id}` : ""}</DialogTitle>
+            <DialogTitle>Material Request {activePr ? `#${activePr.pr_id}` : ""}</DialogTitle>
             <DialogDescription>Review items, set approved quantities, and update status.</DialogDescription>
           </DialogHeader>
 

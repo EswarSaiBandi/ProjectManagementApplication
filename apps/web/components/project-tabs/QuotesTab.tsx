@@ -547,8 +547,15 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
               <div className="grid gap-4 py-2">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">Quote #</label>
-                    <Input value={form.quote_number} onChange={(e) => setForm((p) => ({ ...p, quote_number: e.target.value }))} className="bg-white" />
+                    <label className="text-sm font-medium text-slate-700">
+                      Quote # <span className="text-xs text-slate-500">(auto-generated if empty)</span>
+                    </label>
+                    <Input 
+                      value={form.quote_number} 
+                      onChange={(e) => setForm((p) => ({ ...p, quote_number: e.target.value }))} 
+                      className="bg-white" 
+                      placeholder="Leave empty for auto: 027, 028..."
+                    />
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-slate-700">Status</label>

@@ -224,8 +224,15 @@ export default function OrdersTab({ projectId }: { projectId: string }) {
               <div className="grid gap-4 py-2">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">Order #</label>
-                    <Input value={form.order_number} onChange={(e) => setForm((p) => ({ ...p, order_number: e.target.value }))} className="bg-white" />
+                    <label className="text-sm font-medium text-slate-700">
+                      Order # <span className="text-xs text-slate-500">(auto-generated if empty)</span>
+                    </label>
+                    <Input 
+                      value={form.order_number} 
+                      onChange={(e) => setForm((p) => ({ ...p, order_number: e.target.value }))} 
+                      className="bg-white"
+                      placeholder="Leave empty for auto: ORD-001, ORD-002..."
+                    />
                   </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-slate-700">Status</label>

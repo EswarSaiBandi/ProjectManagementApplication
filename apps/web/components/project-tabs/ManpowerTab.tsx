@@ -276,6 +276,11 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
   const handlePaymentSave = async () => {
     if (!selectedManpower) return;
     
+    if (!paymentForm.payment_date) {
+      toast.error('Payment date is required');
+      return;
+    }
+    
     const amount = Number(paymentForm.amount);
     if (!amount || amount <= 0) {
       toast.error('Amount must be greater than 0');
@@ -642,8 +647,8 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                       </Select>
                     </div>
                     <div className="space-y-2">
-                      <Label>Payment Date</Label>
-                      <Input type="date" value={paymentForm.payment_date} onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })} className="bg-white" />
+                      <Label>Payment Date *</Label>
+                      <Input type="date" value={paymentForm.payment_date} onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })} className="bg-white" required />
                     </div>
                     <div className="space-y-2">
                       <Label>Amount *</Label>

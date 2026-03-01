@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo, PieChart, Layers, Settings, Target } from 'lucide-react';
+import { LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo, PieChart, Layers, Settings, Target, Package, Warehouse } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -14,6 +14,8 @@ const NAV_ITEMS = [
     { label: 'Team', icon: Users, href: '/team' },
     { label: 'Tasks', icon: ListTodo, href: '/tasks' },
     { label: 'Reports', icon: PieChart, href: '/reports' },
+    { label: 'Store Inventory', icon: Warehouse, href: '/store-inventory' },
+    { label: 'Materials', icon: Package, href: '/materials' },
     { label: 'Inventory', icon: Layers, href: '/inventory' },
 ];
 

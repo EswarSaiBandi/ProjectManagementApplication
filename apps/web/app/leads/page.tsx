@@ -15,7 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { 
   Target, Plus, Pencil, Trash, Phone, Mail, Calendar, TrendingUp, 
-  AlertCircle, CheckCircle, Clock, XCircle, ArrowRight, Search, Calculator 
+  AlertCircle, CheckCircle, Clock, XCircle, ArrowRight, Search, Calculator, Upload, Download 
 } from 'lucide-react';
 import EstimateDialog from '@/components/leads/EstimateDialog';
 
@@ -47,20 +47,23 @@ type Lead = {
 
 const STATUS_OPTIONS = ['New', 'Contacted', 'In Progress', 'Qualified', 'Proposal Sent', 'Negotiation', 'Realized', 'Unrealized', 'Won', 'Lost'] as const;
 const PRIORITY_OPTIONS = ['Low', 'Medium', 'High', 'Urgent'] as const;
-const SOURCE_OPTIONS = ['Referral', 'Website', 'Cold Call', 'Social Media', 'Advertisement', 'Walk-in', 'Other'] as const;
 
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
+  const [sourceOptions, setSourceOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [isOpen, setIsOpen] = useState(false);
   const [isConvertOpen, setIsConvertOpen] = useState(false);
   const [isEstimateOpen, setIsEstimateOpen] = useState(false);
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const [editing, setEditing] = useState<Lead | null>(null);
   const [converting, setConverting] = useState<Lead | null>(null);
   const [estimatingLead, setEstimatingLead] = useState<Lead | null>(null);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
 
   const [form, setForm] = useState({
     client_name: '',
@@ -86,6 +89,21 @@ export default function LeadsPage() {
     budget: '',
   });
 
+  const fetchSourceOptions = async () => {
+    const { data, error } = await supabase
+      .from('dynamic_field_options')
+      .select('option_value')
+      .eq('field_type', 'lead_source')
+      .eq('is_active', true)
+      .order('display_order');
+
+    if (!error && data) {
+      setSourceOptions(data.map(d => d.option_value));
+    } else {
+      setSourceOptions(['Referral', 'Website', 'Cold Call', 'Social Media', 'Advertisement', 'Walk-in', 'Other']);
+    }
+  };
+
   const fetchLeads = async () => {
     setLoading(true);
     const { data, error } = await supabase
@@ -105,6 +123,7 @@ export default function LeadsPage() {
 
   useEffect(() => {
     fetchLeads();
+    fetchSourceOptions();
   }, []);
 
   const resetForm = () => {
@@ -158,6 +177,46 @@ export default function LeadsPage() {
   const openEstimate = (lead: Lead) => {
     setEstimatingLead(lead);
     setIsEstimateOpen(true);
+  };
+
+  const handleDownloadTemplate = () => {
+    window.open('/api/leads/template', '_blank');
+  };
+
+  const handleBulkUpload = async () => {
+    if (!uploadFile) {
+      toast.error('Please select a CSV file');
+      return;
+    }
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', uploadFile);
+
+    try {
+      const response = await fetch('/api/leads/bulk-upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        toast.error(result.error || 'Upload failed');
+        setIsUploading(false);
+        return;
+      }
+
+      toast.success(result.message || `${result.count} leads uploaded successfully`);
+      setIsBulkUploadOpen(false);
+      setUploadFile(null);
+      await fetchLeads();
+    } catch (error) {
+      console.error('Upload error:', error);
+      toast.error('Failed to upload leads');
+    }
+
+    setIsUploading(false);
   };
 
   const openConvert = (lead: Lead) => {
@@ -366,12 +425,74 @@ export default function LeadsPage() {
               </CardTitle>
               <p className="text-sm text-slate-600 mt-1">Track potential projects from inquiry to conversion</p>
             </div>
-            <Dialog open={isOpen} onOpenChange={setIsOpen}>
-              <DialogTrigger asChild>
-                <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700">
-                  <Plus className="h-4 w-4 mr-2" /> New Lead
-                </Button>
-              </DialogTrigger>
+            <div className="flex gap-2">
+              <Button 
+                onClick={handleDownloadTemplate}
+                variant="outline"
+                className="border-blue-600 text-blue-600 hover:bg-blue-50"
+              >
+                <Download className="h-4 w-4 mr-2" /> Download Template
+              </Button>
+              <Dialog open={isBulkUploadOpen} onOpenChange={setIsBulkUploadOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="border-green-600 text-green-600 hover:bg-green-50">
+                    <Upload className="h-4 w-4 mr-2" /> Bulk Upload
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-white max-w-lg">
+                  <DialogHeader>
+                    <DialogTitle>Bulk Upload Leads</DialogTitle>
+                    <DialogDescription>Upload multiple leads at once using a CSV file</DialogDescription>
+                  </DialogHeader>
+
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label>Select CSV File *</Label>
+                      <Input
+                        type="file"
+                        accept=".csv"
+                        onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+                        className="bg-white"
+                      />
+                      {uploadFile && (
+                        <p className="text-sm text-green-600">Selected: {uploadFile.name}</p>
+                      )}
+                    </div>
+
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 space-y-2">
+                      <p className="text-sm font-semibold text-blue-800">Instructions:</p>
+                      <ol className="text-xs text-blue-700 space-y-1 list-decimal list-inside">
+                        <li>Download the template using the "Download Template" button</li>
+                        <li>Fill in your lead data (delete sample rows)</li>
+                        <li>Save as CSV and upload here</li>
+                        <li>All leads will be auto-saved with lead numbers</li>
+                      </ol>
+                    </div>
+                  </div>
+
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => {
+                      setIsBulkUploadOpen(false);
+                      setUploadFile(null);
+                    }}>
+                      Cancel
+                    </Button>
+                    <Button 
+                      onClick={handleBulkUpload}
+                      disabled={isUploading || !uploadFile}
+                      className="bg-green-600 text-white hover:bg-green-700"
+                    >
+                      {isUploading ? 'Uploading...' : 'Upload Leads'}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+              <Dialog open={isOpen} onOpenChange={setIsOpen}>
+                <DialogTrigger asChild>
+                  <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700">
+                    <Plus className="h-4 w-4 mr-2" /> New Lead
+                  </Button>
+                </DialogTrigger>
               <DialogContent className="bg-white max-w-3xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>{editing ? 'Edit Lead' : 'New Lead'}</DialogTitle>
@@ -422,7 +543,7 @@ export default function LeadsPage() {
                           <SelectValue placeholder="Select" />
                         </SelectTrigger>
                         <SelectContent className="bg-white">
-                          {SOURCE_OPTIONS.map(s => (
+                          {sourceOptions.map(s => (
                             <SelectItem key={s} value={s}>{s}</SelectItem>
                           ))}
                         </SelectContent>

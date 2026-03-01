@@ -13,7 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import {
     CheckCircle2, TrendingUp, Wallet,
-    ArrowUpRight, ArrowDownLeft, Calendar, Filter, Search, Image as ImageIcon, ExternalLink, MessageSquare, Plus, Pencil, Trash, ArrowUpDown
+    ArrowUpRight, ArrowDownLeft, Calendar, Filter, Search, Image as ImageIcon, ExternalLink, MessageSquare, Plus, Pencil, Trash, ArrowUpDown, Package, Users, Calculator
 } from "lucide-react";
 
 type Transaction = {
@@ -36,7 +36,9 @@ type Transaction = {
 export default function FinancialTab({ projectId }: { projectId: string }) {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [quotesTotal, setQuotesTotal] = useState<number>(0);
+    const [costSummary, setCostSummary] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const [costLoading, setCostLoading] = useState(true);
 
     const [txFilters, setTxFilters] = useState({
         createdOn: '',
@@ -83,6 +85,20 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
         return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     };
 
+    const fetchCostingSummary = async () => {
+        setCostLoading(true);
+        const { data, error } = await supabase
+            .from('project_costing_summary')
+            .select('*')
+            .eq('project_id', projectId)
+            .single();
+
+        if (!error && data) {
+            setCostSummary(data);
+        }
+        setCostLoading(false);
+    };
+
     const fetchFinancialData = async () => {
         setLoading(true);
         // Fetch Transactions
@@ -106,6 +122,10 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
             const total = quoteData.reduce((sum, item) => sum + (item.total_amount || 0), 0);
             setQuotesTotal(total);
         }
+        
+        // Fetch Cost Summary
+        await fetchCostingSummary();
+        
         setLoading(false);
     };
 
@@ -346,8 +366,128 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
     const vendorInvoices = totalSpent;
     const profitLoss = netCashflow;
 
+    const totalLaborCost = (costSummary?.labor_cost_inhouse || 0) + (costSummary?.labor_cost_outsourced || 0);
+    const totalActualCost = costSummary?.total_actual_cost || 0;
+    const profitLossComprehensive = (costSummary?.income_total || 0) - totalActualCost;
+
     return (
         <div className="space-y-6">
+            {/* Integrated Summary - Project Costing + Manpower */}
+            <Card className="bg-gradient-to-br from-blue-50 to-purple-50 border-blue-200">
+                <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                        <Calculator className="h-5 w-5 text-blue-600" />
+                        Comprehensive Financial Overview
+                    </CardTitle>
+                    <p className="text-xs text-slate-600">
+                        Integrated data from Project Costing, Manpower, and Transactions
+                    </p>
+                </CardHeader>
+                <CardContent>
+                    {costLoading ? (
+                        <div className="text-center py-4 text-muted-foreground">Loading cost data...</div>
+                    ) : costSummary ? (
+                        <div className="grid grid-cols-4 gap-4">
+                            <Card>
+                                <CardContent className="pt-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <Package className="h-5 w-5 text-blue-600" />
+                                        <div className="text-xs text-slate-600">Material Costs</div>
+                                    </div>
+                                    <div className="text-xl font-bold text-blue-700">
+                                        {formatCurrency(costSummary.material_cost_actual)}
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-1">From material movements</div>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardContent className="pt-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <Users className="h-5 w-5 text-purple-600" />
+                                        <div className="text-xs text-slate-600">Labor Costs</div>
+                                    </div>
+                                    <div className="text-xl font-bold text-purple-700">
+                                        {formatCurrency(totalLaborCost)}
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-1">
+                                        In-House: {formatCurrency(costSummary.labor_cost_inhouse)}<br/>
+                                        Outsourced: {formatCurrency(costSummary.labor_cost_outsourced)}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardContent className="pt-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <Wallet className="h-5 w-5 text-orange-600" />
+                                        <div className="text-xs text-slate-600">Total Actual Cost</div>
+                                    </div>
+                                    <div className="text-xl font-bold text-orange-700">
+                                        {formatCurrency(totalActualCost)}
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-1">All cost sources</div>
+                                </CardContent>
+                            </Card>
+                            <Card>
+                                <CardContent className="pt-4">
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <TrendingUp className="h-5 w-5 text-green-600" />
+                                        <div className="text-xs text-slate-600">Net Profit/Loss</div>
+                                    </div>
+                                    <div className={`text-xl font-bold ${profitLossComprehensive >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                                        {profitLossComprehensive >= 0 ? '+' : ''}{formatCurrency(profitLossComprehensive)}
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-1">Income - Costs</div>
+                                </CardContent>
+                            </Card>
+                        </div>
+                    ) : (
+                        <div className="text-center py-4 text-slate-500">No cost data available</div>
+                    )}
+                    
+                    {/* Quick Navigation */}
+                    {costSummary && (
+                        <div className="mt-4 pt-4 border-t flex gap-2">
+                            <Button 
+                                size="sm" 
+                                variant="outline" 
+                                onClick={() => {
+                                    const tab = document.querySelector('[data-value="project-costing"]') as HTMLElement;
+                                    tab?.click();
+                                }}
+                                className="text-xs"
+                            >
+                                <Calculator className="h-3 w-3 mr-1" />
+                                View Detailed Costing
+                            </Button>
+                            <Button 
+                                size="sm" 
+                                variant="outline" 
+                                onClick={() => {
+                                    const tab = document.querySelector('[data-value="manpower"]') as HTMLElement;
+                                    tab?.click();
+                                }}
+                                className="text-xs"
+                            >
+                                <Users className="h-3 w-3 mr-1" />
+                                View Manpower & Payments
+                            </Button>
+                            <Button 
+                                size="sm" 
+                                variant="outline" 
+                                onClick={() => {
+                                    const tab = document.querySelector('[data-value="material-movements"]') as HTMLElement;
+                                    tab?.click();
+                                }}
+                                className="text-xs"
+                            >
+                                <Package className="h-3 w-3 mr-1" />
+                                View Material Movements
+                            </Button>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
             {/* 3 Financial Summary Cards */}
             <div className="grid gap-6 md:grid-cols-3">
                 {/* Card 1: Budget Analysis */}
@@ -364,17 +504,21 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-1 shrink-0" />
+                                    <Package className="h-4 w-4 text-blue-600 mt-1 shrink-0" />
                                     <div>
-                                        <p className="text-xs text-muted-foreground">Orders Approved</p>
-                                        <p className="font-semibold text-sm">₹ 0</p>
+                                        <p className="text-xs text-muted-foreground">Material Costs</p>
+                                        <p className="font-semibold text-sm">
+                                            {costLoading ? '...' : formatCurrency(costSummary?.material_cost_actual || 0)}
+                                        </p>
                                     </div>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-1 shrink-0" />
+                                    <Users className="h-4 w-4 text-purple-600 mt-1 shrink-0" />
                                     <div>
-                                        <p className="text-xs text-muted-foreground">Labour Charges</p>
-                                        <p className="font-semibold text-sm">₹ 0</p>
+                                        <p className="text-xs text-muted-foreground">Labour Costs (Total)</p>
+                                        <p className="font-semibold text-sm">
+                                            {costLoading ? '...' : formatCurrency((costSummary?.labor_cost_inhouse || 0) + (costSummary?.labor_cost_outsourced || 0))}
+                                        </p>
                                     </div>
                                 </div>
                             </div>
