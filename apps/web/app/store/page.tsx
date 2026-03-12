@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/lib/supabase';
-import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X, Edit } from 'lucide-react';
+import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Material {
@@ -76,12 +76,28 @@ interface MaterialReturn {
   variant_name?: string;
 }
 
+interface StockEntryLog {
+  log_id: number;
+  material_id: number;
+  variant_id: number | null;
+  quantity: number;
+  number_of_units: number | null;
+  notes: string | null;
+  movement_date: string;
+  material_name?: string;
+  variant_name?: string;
+  metric?: string;
+}
+
+const STOCK_META_PREFIX = '[STOCK_META]';
+
 export default function StorePage() {
   const [materials, setMaterials] = useState<Material[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [inventory, setInventory] = useState<StoreInventory[]>([]);
   const [pendingRequests, setPendingRequests] = useState<MaterialRequest[]>([]);
   const [pendingReturns, setPendingReturns] = useState<MaterialReturn[]>([]);
+  const [stockEntryLogs, setStockEntryLogs] = useState<StockEntryLog[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [isInventoryDialogOpen, setIsInventoryDialogOpen] = useState(false);
@@ -94,8 +110,19 @@ export default function StorePage() {
     variant_id: null as number | null,
     number_of_units: '',
     location: '',
-    notes: ''
+    notes: '',
+    purchase_order_date: '',
+    invoice_number: '',
+    amount_per_unit: '',
+    gst: ''
   });
+  const [reductionForm, setReductionForm] = useState({
+    material_id: null as number | null,
+    variant_id: null as number | null,
+    number_of_units: '',
+    remarks: ''
+  });
+  const [isReducingStock, setIsReducingStock] = useState(false);
   
   const [selectedRequest, setSelectedRequest] = useState<MaterialRequest | null>(null);
   const [fulfillmentUnits, setFulfillmentUnits] = useState<Array<{ variant_id: number; units: number }>>([]);
@@ -103,6 +130,8 @@ export default function StorePage() {
   
   const [selectedReturn, setSelectedReturn] = useState<MaterialReturn | null>(null);
   const [returnReviewNotes, setReturnReviewNotes] = useState('');
+  const [selectedStockLog, setSelectedStockLog] = useState<StockEntryLog | null>(null);
+  const [isStockLogDialogOpen, setIsStockLogDialogOpen] = useState(false);
 
   useEffect(() => {
     fetchAll();
@@ -114,7 +143,8 @@ export default function StorePage() {
       fetchVariants(),
       fetchInventory(),
       fetchPendingRequests(),
-      fetchPendingReturns()
+      fetchPendingReturns(),
+      fetchStockEntryLogs()
     ]);
     setLoading(false);
   };
@@ -217,6 +247,121 @@ export default function StorePage() {
     setPendingReturns(returnsWithDetails);
   };
 
+  const fetchStockEntryLogs = async () => {
+    const { data, error } = await supabase
+      .from('material_movement_logs')
+      .select(`
+        log_id,
+        material_id,
+        variant_id,
+        quantity,
+        number_of_units,
+        notes,
+        movement_date,
+        materials_master!inner(material_name, metric),
+        material_variants(variant_name)
+      `)
+      .eq('movement_type', 'Store In')
+      .in('reference_type', ['Initial Stock', 'Manual Adjustment'])
+      .order('movement_date', { ascending: false })
+      .limit(200);
+
+    if (error) {
+      toast.error('Failed to load stock entry logs: ' + error.message);
+      return;
+    }
+
+    const logsWithDetails = (data || []).map((log: any) => ({
+      ...log,
+      material_name: log.materials_master?.material_name,
+      metric: log.materials_master?.metric,
+      variant_name: log.material_variants?.variant_name
+    }));
+
+    setStockEntryLogs(logsWithDetails);
+  };
+
+  const buildStockEntryNotes = () => {
+    const meta = {
+      poDate: inventoryForm.purchase_order_date || '',
+      invoiceNumber: inventoryForm.invoice_number.trim(),
+      amountPerUnit: inventoryForm.amount_per_unit.trim(),
+      gst: inventoryForm.gst.trim(),
+      remarks: inventoryForm.notes.trim()
+    };
+
+    const hasDetails = Object.values(meta).some((value) => value.length > 0);
+    if (!hasDetails) return null;
+
+    const lines: string[] = [];
+    if (meta.poDate) lines.push(`[PO_DATE] ${meta.poDate}`);
+    if (meta.invoiceNumber) lines.push(`[INVOICE_NUMBER] ${meta.invoiceNumber}`);
+    if (meta.amountPerUnit) lines.push(`[AMOUNT_PER_UNIT] ${meta.amountPerUnit}`);
+    if (meta.gst) lines.push(`[GST] ${meta.gst}`);
+    if (meta.remarks) lines.push(`[REMARKS] ${meta.remarks}`);
+
+    return `${STOCK_META_PREFIX}${JSON.stringify(meta)}\n${lines.join('\n')}`;
+  };
+
+  const parseStockEntryNotes = (notes: string | null) => {
+    if (!notes) {
+      return {
+        poDate: '-',
+        invoiceNumber: '-',
+        amountPerUnit: '-',
+        gst: '-',
+        remarks: '-'
+      };
+    }
+
+    const lines = notes.split('\n').map((line) => line.trim()).filter(Boolean);
+
+    const metaLine = lines.find((line) => line.startsWith(STOCK_META_PREFIX));
+    if (metaLine) {
+      try {
+        const metaRaw = metaLine.slice(STOCK_META_PREFIX.length);
+        const meta = JSON.parse(metaRaw) as {
+          poDate?: string;
+          invoiceNumber?: string;
+          amountPerUnit?: string;
+          gst?: string;
+          remarks?: string;
+        };
+
+        return {
+          poDate: meta.poDate?.trim() || '-',
+          invoiceNumber: meta.invoiceNumber?.trim() || '-',
+          amountPerUnit: meta.amountPerUnit?.trim() || '-',
+          gst: meta.gst?.trim() || '-',
+          remarks: meta.remarks?.trim() || '-'
+        };
+      } catch {
+        // Fall back to legacy tag parsing if metadata is malformed.
+      }
+    }
+
+    const getTaggedValue = (tag: string) => {
+      const line = lines.find((entry) => entry.startsWith(`[${tag}]`));
+      if (!line) return null;
+      return line.replace(`[${tag}]`, '').trim();
+    };
+
+    const hasStructuredTags = lines.some((entry) => entry.startsWith('['));
+    const poDate = getTaggedValue('PO_DATE');
+    const invoiceNumber = getTaggedValue('INVOICE_NUMBER');
+    const amountPerUnit = getTaggedValue('AMOUNT_PER_UNIT');
+    const gst = getTaggedValue('GST');
+    const remarks = getTaggedValue('REMARKS') || (!hasStructuredTags ? notes : null);
+
+    return {
+      poDate: poDate || '-',
+      invoiceNumber: invoiceNumber || '-',
+      amountPerUnit: amountPerUnit || '-',
+      gst: gst || '-',
+      remarks: remarks || '-'
+    };
+  };
+
   const handleSaveInventory = async () => {
     try {
       if (!inventoryForm.material_id || !inventoryForm.variant_id) {
@@ -231,6 +376,7 @@ export default function StorePage() {
       const variant = variants.find(v => v.variant_id === inventoryForm.variant_id);
       const units = parseFloat(inventoryForm.number_of_units);
       const totalQuantity = variant ? units * variant.quantity_per_unit : 0;
+      const stockNotes = buildStockEntryNotes();
 
       const payload = {
         material_id: inventoryForm.material_id,
@@ -238,7 +384,7 @@ export default function StorePage() {
         number_of_units: units,
         total_quantity: totalQuantity,
         location: inventoryForm.location.trim() || null,
-        notes: inventoryForm.notes.trim() || null,
+        notes: stockNotes,
         last_updated: new Date().toISOString()
       };
 
@@ -251,19 +397,64 @@ export default function StorePage() {
         if (error) throw error;
         toast.success('Inventory updated successfully');
       } else {
-        const { error } = await supabase
-          .from('store_inventory')
-          .upsert([payload], {
-            onConflict: 'material_id,variant_id'
-          });
-        
-        if (error) throw error;
+        const existingInventory = inventory.find(
+          (inv) =>
+            inv.material_id === inventoryForm.material_id &&
+            inv.variant_id === inventoryForm.variant_id
+        );
+
+        if (existingInventory) {
+          const { error } = await supabase
+            .from('store_inventory')
+            .update({
+              number_of_units: existingInventory.number_of_units + units,
+              total_quantity: existingInventory.total_quantity + totalQuantity,
+              location: inventoryForm.location.trim() || existingInventory.location || null,
+              notes: stockNotes || existingInventory.notes || null,
+              last_updated: new Date().toISOString()
+            })
+            .eq('inventory_id', existingInventory.inventory_id);
+
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('store_inventory')
+            .insert([payload]);
+
+          if (error) throw error;
+        }
+
         toast.success('Inventory added successfully');
+      }
+
+      const existingInventoryForLog = inventory.find(
+        (inv) =>
+          inv.material_id === inventoryForm.material_id &&
+          inv.variant_id === inventoryForm.variant_id
+      );
+
+      const { error: movementLogError } = await supabase
+        .from('material_movement_logs')
+        .insert({
+          material_id: inventoryForm.material_id,
+          variant_id: inventoryForm.variant_id,
+          movement_type: 'Store In',
+          quantity: totalQuantity,
+          number_of_units: units,
+          reference_type: inventoryForm.inventory_id || existingInventoryForLog ? 'Manual Adjustment' : 'Initial Stock',
+          reference_id: inventoryForm.inventory_id,
+          notes: stockNotes || (inventoryForm.inventory_id ? 'Inventory manually adjusted in store page' : 'Stock added from store page'),
+          movement_date: new Date().toISOString()
+        });
+
+      if (movementLogError) {
+        toast.error('Inventory saved, but failed to create stock entry log: ' + movementLogError.message);
       }
 
       setIsInventoryDialogOpen(false);
       resetInventoryForm();
       fetchInventory();
+      fetchStockEntryLogs();
     } catch (error: any) {
       toast.error('Failed to save inventory: ' + error.message);
     }
@@ -421,6 +612,108 @@ export default function StorePage() {
     }
   };
 
+  const resetReductionForm = () => {
+    setReductionForm({
+      material_id: null,
+      variant_id: null,
+      number_of_units: '',
+      remarks: ''
+    });
+  };
+
+  const handleReduceStock = async () => {
+    try {
+      if (!reductionForm.material_id || !reductionForm.variant_id) {
+        toast.error('Please select material and variant');
+        return;
+      }
+
+      if (!reductionForm.number_of_units || parseFloat(reductionForm.number_of_units) <= 0) {
+        toast.error('Please enter valid units to remove');
+        return;
+      }
+
+      if (!reductionForm.remarks.trim()) {
+        toast.error('Remarks are mandatory for stock reduction');
+        return;
+      }
+
+      const unitsToReduce = parseFloat(reductionForm.number_of_units);
+      const selectedInventory = inventory.find(
+        (inv) =>
+          inv.material_id === reductionForm.material_id &&
+          inv.variant_id === reductionForm.variant_id
+      );
+
+      if (!selectedInventory) {
+        toast.error('Inventory item not found');
+        return;
+      }
+
+      if (unitsToReduce > selectedInventory.number_of_units) {
+        toast.error('Cannot reduce more units than available');
+        return;
+      }
+
+      const variant = variants.find((v) => v.variant_id === reductionForm.variant_id);
+      if (!variant) {
+        toast.error('Selected variant details not found');
+        return;
+      }
+
+      const quantityToReduce = unitsToReduce * variant.quantity_per_unit;
+      const remainingUnits = selectedInventory.number_of_units - unitsToReduce;
+      const remainingQuantity = selectedInventory.total_quantity - quantityToReduce;
+
+      setIsReducingStock(true);
+
+      const { error: movementLogError } = await supabase
+        .from('material_movement_logs')
+        .insert({
+          material_id: selectedInventory.material_id,
+          variant_id: selectedInventory.variant_id,
+          movement_type: 'Store Out',
+          quantity: quantityToReduce,
+          number_of_units: unitsToReduce,
+          reference_type: 'Manual Adjustment',
+          reference_id: selectedInventory.inventory_id,
+          notes: `Stock reduced from store. Remarks: ${reductionForm.remarks.trim()}`,
+          movement_date: new Date().toISOString()
+        });
+
+      if (movementLogError) throw movementLogError;
+
+      if (remainingUnits <= 0) {
+        const { error: deleteError } = await supabase
+          .from('store_inventory')
+          .delete()
+          .eq('inventory_id', selectedInventory.inventory_id);
+
+        if (deleteError) throw deleteError;
+      } else {
+        const { error: updateError } = await supabase
+          .from('store_inventory')
+          .update({
+            number_of_units: remainingUnits,
+            total_quantity: remainingQuantity,
+            last_updated: new Date().toISOString()
+          })
+          .eq('inventory_id', selectedInventory.inventory_id);
+
+        if (updateError) throw updateError;
+      }
+
+      toast.success('Stock reduced successfully');
+      resetReductionForm();
+      fetchInventory();
+      fetchStockEntryLogs();
+    } catch (error: any) {
+      toast.error('Failed to reduce stock: ' + error.message);
+    } finally {
+      setIsReducingStock(false);
+    }
+  };
+
   const resetInventoryForm = () => {
     setInventoryForm({
       inventory_id: null,
@@ -428,7 +721,11 @@ export default function StorePage() {
       variant_id: null,
       number_of_units: '',
       location: '',
-      notes: ''
+      notes: '',
+      purchase_order_date: '',
+      invoice_number: '',
+      amount_per_unit: '',
+      gst: ''
     });
   };
 
@@ -437,22 +734,42 @@ export default function StorePage() {
     setIsInventoryDialogOpen(true);
   };
 
-  const handleEditInventory = (item: StoreInventory) => {
-    setInventoryForm({
-      inventory_id: item.inventory_id,
-      material_id: item.material_id,
-      variant_id: item.variant_id,
-      number_of_units: item.number_of_units.toString(),
-      location: item.location || '',
-      notes: item.notes || ''
-    });
-    setIsInventoryDialogOpen(true);
-  };
-
   const getVariantsForMaterial = (materialId: number | null) => {
     if (!materialId) return [];
     return variants.filter(v => v.material_id === materialId);
   };
+
+  const unitsForPrice = parseFloat(inventoryForm.number_of_units);
+  const validUnitsForPrice = Number.isFinite(unitsForPrice) && unitsForPrice > 0 ? unitsForPrice : 0;
+
+  const amountPerUnitForPrice = parseFloat(inventoryForm.amount_per_unit);
+  const validAmountPerUnitForPrice = Number.isFinite(amountPerUnitForPrice) && amountPerUnitForPrice >= 0 ? amountPerUnitForPrice : 0;
+
+  const basePrice = validUnitsForPrice * validAmountPerUnitForPrice;
+  const gstInput = inventoryForm.gst.trim();
+  const todayDate = new Date().toISOString().split('T')[0];
+
+  let gstAmount = 0;
+  let gstDisplay = '-';
+
+  if (gstInput) {
+    if (gstInput.includes('%')) {
+      const gstRate = parseFloat(gstInput.replace('%', '').trim());
+      if (Number.isFinite(gstRate) && gstRate >= 0) {
+        gstAmount = (basePrice * gstRate) / 100;
+        gstDisplay = `${gstRate}%`;
+      }
+    } else {
+      const fixedGst = parseFloat(gstInput);
+      if (Number.isFinite(fixedGst) && fixedGst >= 0) {
+        gstAmount = fixedGst;
+        gstDisplay = 'Fixed';
+      }
+    }
+  }
+
+  const totalPrice = basePrice + gstAmount;
+  const selectedStockEntryDetails = selectedStockLog ? parseStockEntryNotes(selectedStockLog.notes) : null;
 
   if (loading) {
     return (
@@ -485,8 +802,10 @@ export default function StorePage() {
         <Tabs defaultValue="inventory" className="space-y-6">
           <TabsList className="bg-white border">
             <TabsTrigger value="inventory">Inventory</TabsTrigger>
+            <TabsTrigger value="reduce-stock">Reduce Stock</TabsTrigger>
             <TabsTrigger value="requests">Material Requests</TabsTrigger>
             <TabsTrigger value="returns">Material Returns</TabsTrigger>
+            <TabsTrigger value="stock-entry-logs">Stock Entry Logs</TabsTrigger>
           </TabsList>
 
           {/* Inventory Tab */}
@@ -504,7 +823,7 @@ export default function StorePage() {
                         <Plus className="h-4 w-4 mr-2" /> Add Stock
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="bg-white max-w-md">
+                    <DialogContent className="bg-white max-w-md max-h-[85vh] overflow-y-auto">
                       <DialogHeader>
                         <DialogTitle>
                           {inventoryForm.inventory_id ? 'Update Inventory' : 'Add Stock to Inventory'}
@@ -589,11 +908,75 @@ export default function StorePage() {
                           <Textarea
                             value={inventoryForm.notes}
                             onChange={(e) => setInventoryForm({ ...inventoryForm, notes: e.target.value })}
-                            placeholder="Additional information"
+                            placeholder="Additional remarks"
                             className="bg-white"
                             rows={3}
                           />
                         </div>
+
+                        <div className="space-y-2">
+                          <Label>Purchase Order Date</Label>
+                          <Input
+                            type="date"
+                            value={inventoryForm.purchase_order_date}
+                            onChange={(e) => setInventoryForm({ ...inventoryForm, purchase_order_date: e.target.value })}
+                            max={todayDate}
+                            className="bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Invoice Number</Label>
+                          <Input
+                            value={inventoryForm.invoice_number}
+                            onChange={(e) => setInventoryForm({ ...inventoryForm, invoice_number: e.target.value })}
+                            placeholder="e.g., INV-2026-001"
+                            className="bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>Amount Per Unit</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={inventoryForm.amount_per_unit}
+                            onChange={(e) => setInventoryForm({ ...inventoryForm, amount_per_unit: e.target.value })}
+                            placeholder="e.g., 1250.50"
+                            className="bg-white"
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>GST</Label>
+                          <Input
+                            value={inventoryForm.gst}
+                            onChange={(e) => setInventoryForm({ ...inventoryForm, gst: e.target.value })}
+                            placeholder="e.g., 18% or 250.00"
+                            className="bg-white"
+                          />
+                        </div>
+
+                        {(validUnitsForPrice > 0 || validAmountPerUnitForPrice > 0 || gstInput) && (
+                          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 space-y-1">
+                            <div className="text-sm text-slate-700">
+                              <span className="font-medium">Base Price:</span>{' '}
+                              ₹{basePrice.toFixed(2)}
+                              <span className="text-slate-500 ml-1">
+                                ({validUnitsForPrice.toFixed(2)} units x ₹{validAmountPerUnitForPrice.toFixed(2)})
+                              </span>
+                            </div>
+                            <div className="text-sm text-slate-700">
+                              <span className="font-medium">GST:</span>{' '}
+                              ₹{gstAmount.toFixed(2)}
+                              <span className="text-slate-500 ml-1">({gstDisplay})</span>
+                            </div>
+                            <div className="pt-1 border-t border-emerald-200 text-sm font-semibold text-emerald-800">
+                              Total Price: ₹{totalPrice.toFixed(2)}
+                            </div>
+                          </div>
+                        )}
 
                         <div className="flex gap-2 pt-4">
                           <Button onClick={handleSaveInventory} className="flex-1 bg-blue-600 hover:bg-blue-700">
@@ -619,16 +1002,14 @@ export default function StorePage() {
                       <tr>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Material</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Variant</th>
-                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units</th>
-                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Total Quantity</th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Location</th>
-                        <th className="px-4 py-3 text-center text-sm font-semibold text-slate-700">Actions</th>
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units Available</th>
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Total Count</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {inventory.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
                             No inventory yet. Add stock to get started.
                           </td>
                         </tr>
@@ -642,17 +1023,6 @@ export default function StorePage() {
                               <span className="font-semibold text-slate-900">{item.total_quantity}</span>
                               <span className="text-slate-500 ml-1">{item.metric}</span>
                             </td>
-                            <td className="px-4 py-3 text-sm text-slate-600">{item.location || '-'}</td>
-                            <td className="px-4 py-3 text-center">
-                              <Button
-                                onClick={() => handleEditInventory(item)}
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 px-2"
-                              >
-                                <Edit className="h-4 w-4 text-blue-600" />
-                              </Button>
-                            </td>
                           </tr>
                         ))
                       )}
@@ -661,6 +1031,254 @@ export default function StorePage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Reduce Stock Tab */}
+          <TabsContent value="reduce-stock" className="space-y-4">
+            <Card className="bg-white shadow-sm">
+              <CardHeader className="border-b bg-slate-50">
+                <CardTitle className="flex items-center gap-2">
+                  <Package className="h-5 w-5 text-red-600" />
+                  Reduce Store Inventory
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Material *</Label>
+                    <Select
+                      value={reductionForm.material_id?.toString()}
+                      onValueChange={(value) => {
+                        const materialId = parseInt(value);
+                        setReductionForm({
+                          ...reductionForm,
+                          material_id: materialId,
+                          variant_id: null
+                        });
+                      }}
+                    >
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select material" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white">
+                        {materials
+                          .filter((m) => inventory.some((inv) => inv.material_id === m.material_id))
+                          .map((m) => (
+                            <SelectItem key={m.material_id} value={m.material_id.toString()}>
+                              {m.material_name} ({m.metric})
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Variant *</Label>
+                    <Select
+                      value={reductionForm.variant_id?.toString()}
+                      onValueChange={(value) => setReductionForm({ ...reductionForm, variant_id: parseInt(value) })}
+                      disabled={!reductionForm.material_id}
+                    >
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select variant" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white">
+                        {inventory
+                          .filter((inv) => inv.material_id === reductionForm.material_id)
+                          .map((inv) => (
+                            <SelectItem key={inv.variant_id} value={inv.variant_id.toString()}>
+                              {inv.variant_name} (Available: {inv.number_of_units} units)
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Units to Remove *</Label>
+                    <Input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={reductionForm.number_of_units}
+                      onChange={(e) => setReductionForm({ ...reductionForm, number_of_units: e.target.value })}
+                      placeholder="e.g., 1 or 0.5"
+                      className="bg-white"
+                    />
+                    {reductionForm.variant_id && (
+                      <p className="text-xs text-slate-500">
+                        Available units:{' '}
+                        <span className="font-semibold text-slate-700">
+                          {inventory.find((inv) => inv.variant_id === reductionForm.variant_id)?.number_of_units ?? 0}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Remarks * (Mandatory)</Label>
+                    <Textarea
+                      value={reductionForm.remarks}
+                      onChange={(e) => setReductionForm({ ...reductionForm, remarks: e.target.value })}
+                      placeholder="Reason for removing stock"
+                      className="bg-white"
+                      rows={3}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    onClick={handleReduceStock}
+                    disabled={isReducingStock}
+                    className="bg-red-600 hover:bg-red-700"
+                  >
+                    {isReducingStock ? 'Processing...' : 'Reduce Stock'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Stock Entry Logs Tab */}
+          <TabsContent value="stock-entry-logs" className="space-y-4">
+            <Card className="bg-white shadow-sm">
+              <CardHeader className="border-b bg-slate-50">
+                <CardTitle className="flex items-center gap-2">
+                  <ClipboardList className="h-5 w-5 text-blue-600" />
+                  Stock Entry Logs ({stockEntryLogs.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-slate-50 border-b">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Date</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Material</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Variant</th>
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units</th>
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Quantity</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">PO Date</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Invoice</th>
+                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Amount/Unit</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">GST</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {stockEntryLogs.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
+                            No stock entry logs found
+                          </td>
+                        </tr>
+                      ) : (
+                        stockEntryLogs.map((log) => {
+                          const parsed = parseStockEntryNotes(log.notes);
+                          return (
+                            <tr
+                              key={log.log_id}
+                              className="hover:bg-slate-50 cursor-pointer"
+                              onClick={() => {
+                                setSelectedStockLog(log);
+                                setIsStockLogDialogOpen(true);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  setSelectedStockLog(log);
+                                  setIsStockLogDialogOpen(true);
+                                }
+                              }}
+                              role="button"
+                              tabIndex={0}
+                              title="Click to view full entry details"
+                            >
+                              <td className="px-4 py-3 text-sm text-slate-900">
+                                {new Date(log.movement_date).toLocaleString()}
+                              </td>
+                              <td className="px-4 py-3 text-sm font-medium text-slate-900">{log.material_name}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600">{log.variant_name || '-'}</td>
+                              <td className="px-4 py-3 text-sm text-right text-slate-900">{log.number_of_units ?? '-'}</td>
+                              <td className="px-4 py-3 text-sm text-right">
+                                <span className="font-semibold text-slate-900">{log.quantity}</span>
+                                <span className="text-slate-500 ml-1">{log.metric}</span>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-slate-600">{parsed.poDate}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600">{parsed.invoiceNumber}</td>
+                              <td className="px-4 py-3 text-sm text-right text-slate-600">{parsed.amountPerUnit}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600">{parsed.gst}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600 max-w-xs truncate">{parsed.remarks}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Dialog open={isStockLogDialogOpen} onOpenChange={setIsStockLogDialogOpen}>
+              <DialogContent className="bg-white max-w-lg max-h-[85vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Stock Entry Details</DialogTitle>
+                </DialogHeader>
+                {selectedStockLog && selectedStockEntryDetails && (
+                  <div className="space-y-4 py-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div>
+                        <p className="text-slate-500">Date & Time</p>
+                        <p className="font-medium text-slate-900">{new Date(selectedStockLog.movement_date).toLocaleString()}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Material</p>
+                        <p className="font-medium text-slate-900">{selectedStockLog.material_name || '-'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Variant</p>
+                        <p className="font-medium text-slate-900">{selectedStockLog.variant_name || '-'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Units</p>
+                        <p className="font-medium text-slate-900">{selectedStockLog.number_of_units ?? '-'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Quantity</p>
+                        <p className="font-medium text-slate-900">
+                          {selectedStockLog.quantity} {selectedStockLog.metric || ''}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">PO Date</p>
+                        <p className="font-medium text-slate-900">{selectedStockEntryDetails.poDate}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Invoice Number</p>
+                        <p className="font-medium text-slate-900">{selectedStockEntryDetails.invoiceNumber}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Amount Per Unit</p>
+                        <p className="font-medium text-slate-900">{selectedStockEntryDetails.amountPerUnit}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">GST</p>
+                        <p className="font-medium text-slate-900">{selectedStockEntryDetails.gst}</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-sm text-slate-500">Remarks</p>
+                      <p className="text-sm font-medium text-slate-900 whitespace-pre-wrap break-words">
+                        {selectedStockEntryDetails.remarks}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
           </TabsContent>
 
           {/* Material Requests Tab */}
