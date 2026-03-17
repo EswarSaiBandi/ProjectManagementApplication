@@ -29,18 +29,10 @@ type Project = {
     project_type: string | null;
 };
 
-const DEFAULT_PROJECT_TYPES = [
-    // "Interior Design",
-    // "Roofing",
-    // "Waterproofing",
-    // "Property Management",
-    // "Rennovation",
-];
-
 export default function ProjectsPage() {
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
-    const [projectTypeOptions, setProjectTypeOptions] = useState<string[]>(DEFAULT_PROJECT_TYPES);
+    const [projectTypeOptions, setProjectTypeOptions] = useState<string[]>([]);
 
     // New/Edit Project Form State
     const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
@@ -49,7 +41,7 @@ export default function ProjectsPage() {
         project_name: '',
         location: '',
         status: 'Planning',
-        project_type: DEFAULT_PROJECT_TYPES[0]
+        project_type: ''
     });
 
     // Delete Project State
@@ -83,7 +75,7 @@ export default function ProjectsPage() {
 
         if (error) {
             console.error("Error fetching project types:", error);
-            setProjectTypeOptions(DEFAULT_PROJECT_TYPES);
+            setProjectTypeOptions([]);
             return;
         }
 
@@ -91,8 +83,8 @@ export default function ProjectsPage() {
             .map((item: { option_value: string }) => item.option_value?.trim())
             .filter((value): value is string => Boolean(value));
 
-        const uniqueOptions = Array.from(new Set([...dynamicOptions, ...DEFAULT_PROJECT_TYPES]));
-        setProjectTypeOptions(uniqueOptions.length > 0 ? uniqueOptions : DEFAULT_PROJECT_TYPES);
+        const uniqueOptions = Array.from(new Set(dynamicOptions));
+        setProjectTypeOptions(uniqueOptions);
     };
 
     useEffect(() => {
@@ -100,9 +92,19 @@ export default function ProjectsPage() {
         fetchProjectTypeOptions();
     }, []);
 
+    useEffect(() => {
+        if (!newProject.project_type && projectTypeOptions.length > 0) {
+            setNewProject((prev) => ({ ...prev, project_type: projectTypeOptions[0] }));
+        }
+    }, [projectTypeOptions, newProject.project_type]);
+
     const handleCreateProject = async () => {
         if (!newProject.project_name) {
             toast.error("Project Name is required.");
+            return;
+        }
+        if (!newProject.project_type) {
+            toast.error("Project Type is required.");
             return;
         }
 
@@ -133,7 +135,7 @@ export default function ProjectsPage() {
         if (!error) {
             toast.success(editingId ? "Project updated successfully!" : "Project created successfully!");
             setIsNewProjectOpen(false);
-            setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || DEFAULT_PROJECT_TYPES[0] });
+            setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || '' });
             setEditingId(null);
             fetchProjects();
         } else {
@@ -147,7 +149,7 @@ export default function ProjectsPage() {
         const activeTypeSet = new Set(projectTypeOptions);
         const resolvedProjectType = project.project_type && activeTypeSet.has(project.project_type)
             ? project.project_type
-            : (projectTypeOptions[0] || DEFAULT_PROJECT_TYPES[0]);
+            : (projectTypeOptions[0] || '');
 
         setNewProject({
             project_name: project.project_name,
@@ -190,7 +192,7 @@ export default function ProjectsPage() {
 
     const openNewProjectModal = () => {
         setEditingId(null);
-        setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || DEFAULT_PROJECT_TYPES[0] });
+        setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || '' });
         setIsNewProjectOpen(true);
     };
 
@@ -246,6 +248,7 @@ export default function ProjectsPage() {
                                     <Select
                                         value={newProject.project_type}
                                         onValueChange={(val: string) => setNewProject({ ...newProject, project_type: val })}
+                                        disabled={projectTypeOptions.length === 0}
                                     >
                                         <SelectTrigger className="bg-white text-slate-900 border-slate-300">
                                             <SelectValue placeholder="Select type" />
@@ -262,6 +265,11 @@ export default function ProjectsPage() {
                                             ))}
                                         </SelectContent>
                                     </Select>
+                                    {projectTypeOptions.length === 0 && (
+                                        <p className="mt-1 text-xs text-red-600">
+                                            No active project types found. Add/activate from Settings - Dynamic Field Configuration.
+                                        </p>
+                                    )}
                                 </div>
                             </div>
                             <div className="grid grid-cols-4 items-center gap-4">
