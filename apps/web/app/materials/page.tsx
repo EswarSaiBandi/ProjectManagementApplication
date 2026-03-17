@@ -31,12 +31,11 @@ interface Variant {
   material_name?: string;
 }
 
-const METRICS = ['Litres', 'Kgs', 'Tonnes', 'Sqft', 'Metres', 'Units', 'Pieces', 'Boxes', 'Bags'];
-
 export default function MaterialsManagementPage() {
   
   const [materials, setMaterials] = useState<Material[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
+  const [metricOptions, setMetricOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   
   const [searchQuery, setSearchQuery] = useState('');
@@ -51,7 +50,7 @@ export default function MaterialsManagementPage() {
     material_id: null as number | null,
     material_name: '',
     description: '',
-    metric: 'Litres'
+    metric: ''
   });
   
   const [variantForm, setVariantForm] = useState({
@@ -62,9 +61,38 @@ export default function MaterialsManagementPage() {
   });
 
   useEffect(() => {
+    fetchMetricOptions();
     fetchMaterials();
     fetchVariants();
   }, []);
+
+  useEffect(() => {
+    if (!materialForm.metric && metricOptions.length > 0) {
+      setMaterialForm((prev) => ({ ...prev, metric: metricOptions[0] }));
+    }
+  }, [metricOptions, materialForm.metric]);
+
+  const fetchMetricOptions = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('dynamic_field_options')
+        .select('option_value')
+        .eq('field_type', 'material_category')
+        .eq('is_active', true)
+        .order('display_order', { ascending: true });
+
+      if (error) throw error;
+
+      const options = (data || [])
+        .map((row: { option_value: string }) => row.option_value?.trim())
+        .filter((value): value is string => Boolean(value));
+
+      setMetricOptions(Array.from(new Set(options)));
+    } catch (error: any) {
+      toast.error('Failed to load material metrics: ' + error.message);
+      setMetricOptions([]);
+    }
+  };
 
   const fetchMaterials = async () => {
     try {
@@ -118,6 +146,10 @@ export default function MaterialsManagementPage() {
     try {
       if (!materialForm.material_name.trim()) {
         toast.error('Material name is required');
+        return;
+      }
+      if (!materialForm.metric) {
+        toast.error('Metric is required');
         return;
       }
 
@@ -294,7 +326,7 @@ export default function MaterialsManagementPage() {
       material_id: null,
       material_name: '',
       description: '',
-      metric: 'Litres'
+      metric: metricOptions[0] || ''
     });
   };
 
@@ -381,7 +413,7 @@ export default function MaterialsManagementPage() {
                   </SelectTrigger>
                   <SelectContent className="bg-white">
                     <SelectItem value="All">All Metrics</SelectItem>
-                    {METRICS.map(m => (
+                    {metricOptions.map(m => (
                       <SelectItem key={m} value={m}>{m}</SelectItem>
                     ))}
                   </SelectContent>
@@ -476,16 +508,25 @@ export default function MaterialsManagementPage() {
                       
                       <div className="space-y-2">
                         <Label>Metric *</Label>
-                        <Select value={materialForm.metric} onValueChange={(v) => setMaterialForm({ ...materialForm, metric: v })}>
+                        <Select
+                          value={materialForm.metric}
+                          onValueChange={(v) => setMaterialForm({ ...materialForm, metric: v })}
+                          disabled={metricOptions.length === 0}
+                        >
                           <SelectTrigger className="bg-white">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent className="bg-white">
-                            {METRICS.map((m) => (
+                            {metricOptions.map((m) => (
                               <SelectItem key={m} value={m}>{m}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
+                        {metricOptions.length === 0 && (
+                          <p className="text-xs text-red-600">
+                            No active material metrics found. Add/activate them in Settings - Dynamic Field Configuration.
+                          </p>
+                        )}
                       </div>
 
                       <div className="space-y-2">

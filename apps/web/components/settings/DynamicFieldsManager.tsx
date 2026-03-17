@@ -29,7 +29,7 @@ const FIELD_TYPES = [
   { value: 'cost_category', label: 'Cost Categories' },
   { value: 'payment_method', label: 'Payment Methods' },
   { value: 'project_type', label: 'Project Types' },
-  { value: 'material_category', label: 'Material Categories' },
+  { value: 'material_category', label: 'Material Metrics' },
   { value: 'task_priority', label: 'Task Priorities' },
 ];
 
