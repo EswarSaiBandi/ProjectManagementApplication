@@ -26,11 +26,21 @@ type Project = {
     project_name: string;
     status: string;
     location: string | null;
+    project_type: string | null;
 };
+
+const DEFAULT_PROJECT_TYPES = [
+    // "Interior Design",
+    // "Roofing",
+    // "Waterproofing",
+    // "Property Management",
+    // "Rennovation",
+];
 
 export default function ProjectsPage() {
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
+    const [projectTypeOptions, setProjectTypeOptions] = useState<string[]>(DEFAULT_PROJECT_TYPES);
 
     // New/Edit Project Form State
     const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
@@ -39,7 +49,7 @@ export default function ProjectsPage() {
         project_name: '',
         location: '',
         status: 'Planning',
-        project_type: 'Interior Design' // Default
+        project_type: DEFAULT_PROJECT_TYPES[0]
     });
 
     // Delete Project State
@@ -51,7 +61,7 @@ export default function ProjectsPage() {
         setLoading(true);
         const { data, error } = await supabase
             .from('projects')
-            .select('project_id, project_name, status, location')
+            .select('project_id, project_name, status, location, project_type')
             .order('created_at', { ascending: false });
 
         if (data) {
@@ -63,8 +73,31 @@ export default function ProjectsPage() {
         setLoading(false);
     };
 
+    const fetchProjectTypeOptions = async () => {
+        const { data, error } = await supabase
+            .from('dynamic_field_options')
+            .select('option_value')
+            .eq('field_type', 'project_type')
+            .eq('is_active', true)
+            .order('display_order', { ascending: true });
+
+        if (error) {
+            console.error("Error fetching project types:", error);
+            setProjectTypeOptions(DEFAULT_PROJECT_TYPES);
+            return;
+        }
+
+        const dynamicOptions = (data || [])
+            .map((item: { option_value: string }) => item.option_value?.trim())
+            .filter((value): value is string => Boolean(value));
+
+        const uniqueOptions = Array.from(new Set([...dynamicOptions, ...DEFAULT_PROJECT_TYPES]));
+        setProjectTypeOptions(uniqueOptions.length > 0 ? uniqueOptions : DEFAULT_PROJECT_TYPES);
+    };
+
     useEffect(() => {
         fetchProjects();
+        fetchProjectTypeOptions();
     }, []);
 
     const handleCreateProject = async () => {
@@ -100,7 +133,7 @@ export default function ProjectsPage() {
         if (!error) {
             toast.success(editingId ? "Project updated successfully!" : "Project created successfully!");
             setIsNewProjectOpen(false);
-            setNewProject({ project_name: '', location: '', status: 'Planning', project_type: 'Interior Design' });
+            setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || DEFAULT_PROJECT_TYPES[0] });
             setEditingId(null);
             fetchProjects();
         } else {
@@ -109,13 +142,18 @@ export default function ProjectsPage() {
         }
     };
 
-    const handleEditProject = (project: any) => {
+    const handleEditProject = (project: Project) => {
         setEditingId(project.project_id);
+        const activeTypeSet = new Set(projectTypeOptions);
+        const resolvedProjectType = project.project_type && activeTypeSet.has(project.project_type)
+            ? project.project_type
+            : (projectTypeOptions[0] || DEFAULT_PROJECT_TYPES[0]);
+
         setNewProject({
             project_name: project.project_name,
             location: project.location || '',
             status: project.status,
-            project_type: project.project_type || 'Interior Design'
+            project_type: resolvedProjectType
         });
         setIsNewProjectOpen(true);
     };
@@ -152,7 +190,7 @@ export default function ProjectsPage() {
 
     const openNewProjectModal = () => {
         setEditingId(null);
-        setNewProject({ project_name: '', location: '', status: 'Planning', project_type: 'Interior Design' });
+        setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || DEFAULT_PROJECT_TYPES[0] });
         setIsNewProjectOpen(true);
     };
 
@@ -213,11 +251,15 @@ export default function ProjectsPage() {
                                             <SelectValue placeholder="Select type" />
                                         </SelectTrigger>
                                         <SelectContent className="bg-white border border-slate-200 shadow-xl z-[9999]">
-                                            <SelectItem className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1" value="Interior Design">Interior Design</SelectItem>
-                                            <SelectItem className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1" value="Roofing">Roofing</SelectItem>
-                                            <SelectItem className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1" value="Exterior / Facade">Exterior / Facade</SelectItem>
-                                            <SelectItem className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1" value="Structural / Civil">Structural / Civil</SelectItem>
-                                            <SelectItem className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1" value="Landscape">Landscape</SelectItem>
+                                            {projectTypeOptions.map((option) => (
+                                                <SelectItem
+                                                    key={option}
+                                                    className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1"
+                                                    value={option}
+                                                >
+                                                    {option}
+                                                </SelectItem>
+                                            ))}
                                         </SelectContent>
                                     </Select>
                                 </div>

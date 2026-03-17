@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Trash, Settings, Check, X } from 'lucide-react';
+import { Plus, Settings, Check, X } from 'lucide-react';
 
 type DynamicOption = {
   option_id: number;
@@ -60,7 +60,8 @@ export default function DynamicFieldsManager() {
   }, [activeFieldType]);
 
   const handleAdd = async () => {
-    if (!newOption.trim()) {
+    const nextValue = newOption.trim();
+    if (!nextValue) {
       toast.error('Option value is required');
       return;
     }
@@ -68,11 +69,45 @@ export default function DynamicFieldsManager() {
     setIsSaving(true);
     const { data: userData } = await supabase.auth.getUser();
 
+    const existing = options.find(
+      (o) => o.option_value.trim().toLowerCase() === nextValue.toLowerCase()
+    );
+
+    if (existing) {
+      if (existing.is_active) {
+        toast.error('Option already exists and is active');
+        setIsSaving(false);
+        return;
+      }
+
+      const { error: reactivateError } = await supabase
+        .from('dynamic_field_options')
+        .update({
+          is_active: true,
+          color_code: activeFieldType === 'cost_category' ? (newColor.trim() || existing.color_code) : existing.color_code,
+        })
+        .eq('option_id', existing.option_id);
+
+      if (reactivateError) {
+        console.error('Reactivate option error:', reactivateError);
+        toast.error(reactivateError.message || 'Failed to reactivate option');
+        setIsSaving(false);
+        return;
+      }
+
+      toast.success('Option reactivated');
+      setNewOption('');
+      setNewColor('');
+      await fetchOptions(activeFieldType);
+      setIsSaving(false);
+      return;
+    }
+
     const maxOrder = options.length > 0 ? Math.max(...options.map(o => o.display_order)) : 0;
 
     const payload = {
       field_type: activeFieldType,
-      option_value: newOption.trim(),
+      option_value: nextValue,
       display_order: maxOrder + 1,
       is_active: true,
       color_code: newColor.trim() || null,
@@ -108,24 +143,6 @@ export default function DynamicFieldsManager() {
     }
 
     toast.success(currentActive ? 'Option deactivated' : 'Option activated');
-    await fetchOptions(activeFieldType);
-  };
-
-  const handleDelete = async (optionId: number) => {
-    if (!confirm('Delete this option? This cannot be undone.')) return;
-
-    const { error } = await supabase
-      .from('dynamic_field_options')
-      .delete()
-      .eq('option_id', optionId);
-
-    if (error) {
-      console.error('Delete option error:', error);
-      toast.error('Failed to delete option');
-      return;
-    }
-
-    toast.success('Option deleted');
     await fetchOptions(activeFieldType);
   };
 
@@ -217,7 +234,7 @@ export default function DynamicFieldsManager() {
                   <TableHead className="w-[60px]">Order</TableHead>
                   <TableHead>Option Value</TableHead>
                   {activeFieldType === 'cost_category' && <TableHead className="w-[100px]">Color</TableHead>}
-                  <TableHead className="w-[140px]">Actions</TableHead>
+                  <TableHead className="w-[180px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -241,22 +258,14 @@ export default function DynamicFieldsManager() {
                       </TableCell>
                     )}
                     <TableCell>
-                      <div className="flex gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleToggleActive(option.option_id, option.is_active)}
-                        >
-                          <X className="h-4 w-4 text-orange-600" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleDelete(option.option_id)}
-                        >
-                          <Trash className="h-4 w-4 text-red-600" />
-                        </Button>
-                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleToggleActive(option.option_id, option.is_active)}
+                      >
+                        <X className="h-4 w-4 text-orange-600 mr-1" />
+                        Deactivate
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}

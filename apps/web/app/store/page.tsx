@@ -464,8 +464,9 @@ export default function StorePage() {
     setSelectedRequest(request);
     setApprovalNotes('');
     
-    const availableVariants = inventory.filter(inv => inv.material_id === request.material_id);
-    setFulfillmentUnits(availableVariants.map(inv => ({ variant_id: inv.variant_id, units: 0 })));
+    const requestMaterialId = Number(request.material_id);
+    const availableVariants = inventory.filter(inv => Number(inv.material_id) === requestMaterialId);
+    setFulfillmentUnits(availableVariants.map(inv => ({ variant_id: Number(inv.variant_id), units: 0 })));
     
     setIsFulfillDialogOpen(true);
   };
@@ -475,7 +476,7 @@ export default function StorePage() {
     
     try {
       const totalFulfilled = fulfillmentUnits.reduce((sum, fu) => {
-        const inv = inventory.find(i => i.variant_id === fu.variant_id);
+        const inv = inventory.find(i => Number(i.variant_id) === Number(fu.variant_id));
         return sum + (inv ? fu.units * inv.quantity_per_unit! : 0);
       }, 0);
 
@@ -498,7 +499,7 @@ export default function StorePage() {
 
       for (const fu of fulfillmentUnits) {
         if (fu.units > 0) {
-          const inv = inventory.find(i => i.variant_id === fu.variant_id);
+          const inv = inventory.find(i => Number(i.variant_id) === Number(fu.variant_id));
           if (!inv) continue;
           
           await supabase
@@ -1423,10 +1424,11 @@ export default function StorePage() {
               <div className="space-y-2">
                 <Label>Available Units (Select quantity to fulfill)</Label>
                 <div className="border rounded-lg divide-y">
-                  {inventory.filter(inv => inv.material_id === selectedRequest.material_id).map((inv) => {
-                    const currentFulfillment = fulfillmentUnits.find(fu => fu.variant_id === inv.variant_id);
+                  {inventory.filter(inv => Number(inv.material_id) === Number(selectedRequest.material_id)).map((inv) => {
+                    const inventoryVariantId = Number(inv.variant_id);
+                    const currentFulfillment = fulfillmentUnits.find(fu => Number(fu.variant_id) === inventoryVariantId);
                     return (
-                      <div key={inv.variant_id} className="p-3 flex items-center justify-between">
+                      <div key={inventoryVariantId} className="p-3 flex items-center justify-between">
                         <div className="flex-1">
                           <p className="font-medium text-sm">{inv.variant_name}</p>
                           <p className="text-xs text-slate-600">Available: {inv.number_of_units} units ({inv.total_quantity} {inv.metric})</p>
@@ -1441,11 +1443,13 @@ export default function StorePage() {
                             onChange={(e) => {
                               const newUnits = parseFloat(e.target.value) || 0;
                               setFulfillmentUnits(prev =>
-                                prev.map(fu =>
-                                  fu.variant_id === inv.variant_id
-                                    ? { ...fu, units: Math.min(newUnits, inv.number_of_units) }
-                                    : fu
-                                )
+                                prev.some(fu => Number(fu.variant_id) === inventoryVariantId)
+                                  ? prev.map(fu =>
+                                      Number(fu.variant_id) === inventoryVariantId
+                                        ? { ...fu, units: Math.min(newUnits, inv.number_of_units) }
+                                        : fu
+                                    )
+                                  : [...prev, { variant_id: inventoryVariantId, units: Math.min(newUnits, inv.number_of_units) }]
                               );
                             }}
                             className="w-24 bg-white"
@@ -1460,7 +1464,7 @@ export default function StorePage() {
                 <div className="bg-blue-50 p-3 rounded-lg">
                   <p className="text-sm font-semibold text-blue-900">
                     Total to fulfill: {fulfillmentUnits.reduce((sum, fu) => {
-                      const inv = inventory.find(i => i.variant_id === fu.variant_id);
+                      const inv = inventory.find(i => Number(i.variant_id) === Number(fu.variant_id));
                       return sum + (inv ? fu.units * inv.quantity_per_unit! : 0);
                     }, 0).toFixed(2)} {selectedRequest.metric}
                   </p>
