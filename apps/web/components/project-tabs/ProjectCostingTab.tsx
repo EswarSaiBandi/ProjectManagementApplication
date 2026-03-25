@@ -144,7 +144,13 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
     if (!pmRows || pmRows.length === 0) { setManpowerRows([]); return; }
 
-    const labourIds = [...new Set(pmRows.map((r: any) => r.labour_id).filter(Boolean))];
+    const labourIds = Array.from(
+      new Set(
+        pmRows
+          .map((r: any) => r.labour_id)
+          .filter((id: any): id is number => typeof id === 'number')
+      )
+    );
     let labourMap: Record<number, any> = {};
     if (labourIds.length > 0) {
       const { data: lRows } = await supabase

@@ -105,7 +105,13 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
       labour_type: r.labour_type ?? r.labor_type ?? 'In-House',
     })) as ManpowerRow[];
 
-    const labourIds = [...new Set(pm.map(r => r.labour_id).filter(Boolean))];
+    const labourIds = Array.from(
+      new Set(
+        pm
+          .map((r) => r.labour_id)
+          .filter((id): id is number => typeof id === 'number')
+      )
+    );
     if (labourIds.length > 0) {
       const { data: lRows } = await supabase
         .from('labour_master')

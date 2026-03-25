@@ -236,7 +236,6 @@ export default function ReportsPage() {
         return <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">Loading...</div>;
     }
 
-    const taskRows = summaries.flatMap(s => Array.from({ length: s.totalTasks }).map((_, i) => ({ project: s.project.project_name, ...s })));
     const statusGroups = projects.reduce<Record<string, number>>((acc, p) => {
         acc[p.status] = (acc[p.status] || 0) + 1; return acc;
     }, {});
