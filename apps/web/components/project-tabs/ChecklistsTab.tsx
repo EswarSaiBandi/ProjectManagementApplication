@@ -32,7 +32,7 @@ function statusBadgeClass(status: string) {
   return 'bg-yellow-100 text-yellow-800';
 }
 
-export default function ChecklistsTab({ projectId }: { projectId: string }) {
+export default function ChecklistsTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
 
   const [rows, setRows] = useState<ChecklistRow[]>([]);
@@ -170,11 +170,13 @@ export default function ChecklistsTab({ projectId }: { projectId: string }) {
           </CardTitle>
 
           <Dialog open={isOpen} onOpenChange={setIsOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
-                <Plus className="h-4 w-4 mr-2" /> Add
-              </Button>
-            </DialogTrigger>
+            {!readOnly && (
+              <DialogTrigger asChild>
+                <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
+                  <Plus className="h-4 w-4 mr-2" /> Add
+                </Button>
+              </DialogTrigger>
+            )}
             <DialogContent className="bg-white max-w-xl">
               <DialogHeader>
                 <DialogTitle>{editing ? 'Edit Checklist Item' : 'Add Checklist Item'}</DialogTitle>
@@ -252,25 +254,29 @@ export default function ChecklistsTab({ projectId }: { projectId: string }) {
                     <TableCell>
                       <Badge className={statusBadgeClass(r.status)}>{r.status}</Badge>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex gap-2">
-                        {STATUS_OPTIONS.map((s) => (
-                          <Button key={s} variant="outline" size="sm" onClick={() => quickSetStatus(r, s)} className="h-8">
-                            {s}
+                    {!readOnly && (
+                      <TableCell>
+                        <div className="flex gap-2">
+                          {STATUS_OPTIONS.map((s) => (
+                            <Button key={s} variant="outline" size="sm" onClick={() => quickSetStatus(r, s)} className="h-8">
+                              {s}
+                            </Button>
+                          ))}
+                        </div>
+                      </TableCell>
+                    )}
+                    {!readOnly && (
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
+                            <Pencil className="h-4 w-4" />
                           </Button>
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => handleDelete(r)}>
-                          <Trash className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
+                          <Button variant="outline" size="sm" onClick={() => handleDelete(r)}>
+                            <Trash className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))}
               </TableBody>

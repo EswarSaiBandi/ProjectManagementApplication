@@ -66,6 +66,16 @@ export default function ProjectInventoryTab({ projectId }: { projectId: string }
     fetchAllData();
   }, [projectId]);
 
+  // Re-fetch whenever StockUsedTab signals an inventory change
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId: string }>).detail;
+      if (detail?.projectId === projectId) fetchAllData();
+    };
+    window.addEventListener('inventory-updated', handler);
+    return () => window.removeEventListener('inventory-updated', handler);
+  }, [projectId]);
+
   const fetchAllData = async () => {
     setLoading(true);
     await Promise.all([fetchInventory(), fetchRequests(), fetchStockUsed(), fetchReturns()]);

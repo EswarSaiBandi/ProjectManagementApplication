@@ -59,7 +59,7 @@ const MASTER_ACTIVITIES = [
     { name: "Sewerage Line", tag: "Plumbing" },
 ];
 
-export default function ActivitiesTab({ projectId }: { projectId: string }) {
+export default function ActivitiesTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
     const [activities, setActivities] = useState<Activity[]>([]);
     const [isActivityOpen, setIsActivityOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -410,11 +410,13 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                     <div className="flex space-x-2">
                         {/* Only show actions in list mode or specific actions in chart mode if needed */}
                         <Dialog open={isActivityOpen} onOpenChange={(open: boolean) => { setIsActivityOpen(open); if (!open) { setEditingId(null); setCreateMode("bulk"); setNewActivity({ activity_name: '', description: '', dependencies: '', start_date: '', end_date: '', tag: 'Site Work', owner: currentUser, progress: 0, status: 'Pending' }); setSelectedActivities([]); setSearchTerm(""); } }}>
-                            <DialogTrigger asChild>
-                                <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 h-9" onClick={() => { setEditingId(null); }}>
-                                    <Plus className="h-4 w-4 mr-2" /> Activity
-                                </Button>
-                            </DialogTrigger>
+                            {!readOnly && (
+                                <DialogTrigger asChild>
+                                    <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 h-9" onClick={() => { setEditingId(null); }}>
+                                        <Plus className="h-4 w-4 mr-2" /> Activity
+                                    </Button>
+                                </DialogTrigger>
+                            )}
                             <DialogContent className="max-w-2xl bg-white rounded-xl shadow-2xl border-0">
                                 <DialogHeader>
                                     <DialogTitle className="text-xl font-bold">{editingId ? 'Edit Activity' : 'Add New Activity'}</DialogTitle>
@@ -801,6 +803,7 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                                                     <MessageSquare className="h-3.5 w-3.5 mr-1.5" /> Note
                                                 </Button>
                                             </TableCell>
+                                            {!readOnly && (
                                             <TableCell>
                                                 <div className="flex items-center justify-center gap-1 opacity-100 text-slate-500">
                                                     <Button
@@ -829,6 +832,7 @@ export default function ActivitiesTab({ projectId }: { projectId: string }) {
                                                     </Button>
                                                 </div>
                                             </TableCell>
+                                            )}
                                         </TableRow>
                                     ))
                                 )}

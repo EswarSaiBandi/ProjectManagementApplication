@@ -69,13 +69,54 @@ export async function middleware(request: NextRequest) {
     // https://supabase.com/docs/guides/auth/server-side/nextjs
     const { data: { user } } = await supabase.auth.getUser()
 
-    // Protect all authenticated app areas (sidebar pages + project pages).
-    const protectedPaths = ['/projects', '/dashboard', '/settings', '/schedule', '/tasks', '/team', '/reports', '/inventory']
-    const isProtectedPath = protectedPaths.some(path => request.nextUrl.pathname.startsWith(path))
+    // Protect all authenticated app areas
+    const protectedPaths = [
+        '/projects', '/dashboard', '/settings', '/schedule', '/tasks',
+        '/team', '/reports', '/inventory', '/leads', '/store', '/materials',
+        '/movement-logs', '/leaves', '/labour',
+    ];
+    const isProtectedPath = protectedPaths.some(path => request.nextUrl.pathname.startsWith(path));
 
     if (!user && isProtectedPath) {
-        const redirectUrl = new URL('/login', request.url)
-        return NextResponse.redirect(redirectUrl)
+        const redirectUrl = new URL('/login', request.url);
+        return NextResponse.redirect(redirectUrl);
+    }
+
+    // Role-based route protection — fetch profile once for both checks
+    const needsRoleCheck =
+        request.nextUrl.pathname.startsWith('/leaves') ||
+        request.nextUrl.pathname.startsWith('/inventory') ||
+        request.nextUrl.pathname.startsWith('/labour');
+
+    if (user && needsRoleCheck) {
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('role')
+            .eq('user_id', user.id)
+            .single();
+
+        const userRole = profile?.role ?? null;
+
+        // /leaves — only block Clients; if profile missing let through (page handles it)
+        if (request.nextUrl.pathname.startsWith('/leaves')) {
+            if (userRole === 'Client') {
+                return NextResponse.redirect(new URL('/projects', request.url));
+            }
+        }
+
+        // /inventory — Admin only; if profile missing, block
+        if (request.nextUrl.pathname.startsWith('/inventory')) {
+            if (userRole !== 'Admin') {
+                return NextResponse.redirect(new URL('/projects', request.url));
+            }
+        }
+
+        // /labour — Admin only
+        if (request.nextUrl.pathname.startsWith('/labour')) {
+            if (userRole !== 'Admin') {
+                return NextResponse.redirect(new URL('/projects', request.url));
+            }
+        }
     }
 
     // Optional: Redirect logged-in users away from /login

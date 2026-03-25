@@ -15,9 +15,12 @@ import { Box, Plus, Edit, Trash2, Search, Package } from 'lucide-react';
 
 type StockUsedItem = {
   id: number;
+  variant_id: number;
+  material_id: number;
   material_name: string;
   variant_name: string;
   quantity_used: number;
+  quantity_per_unit: number;
   metric: string;
   used_date: string;
   notes: string | null;
@@ -54,7 +57,9 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<StockUsedItem | null>(null);
+
   const [form, setForm] = useState({
     material_id: '',
     variant_id: '',
@@ -62,7 +67,13 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
     notes: '',
     used_date: new Date().toISOString().split('T')[0]
   });
-  
+
+  const [editForm, setEditForm] = useState({
+    units_used: '',
+    notes: '',
+    used_date: ''
+  });
+
   const [selectedVariant, setSelectedVariant] = useState<Variant | null>(null);
 
   useEffect(() => {
@@ -79,7 +90,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
         .from('project_stock_used')
         .select(`
           *,
-          material_variants!inner(variant_name, materials_master!inner(material_name, metric))
+          material_variants!inner(variant_name, quantity_per_unit, materials_master!inner(material_id, material_name, metric))
         `)
         .eq('project_id', projectId)
         .order('used_date', { ascending: false });
@@ -88,9 +99,12 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
 
       const formatted = (data || []).map((item: any) => ({
         id: item.id,
+        variant_id: item.variant_id,
+        material_id: item.material_variants?.materials_master?.material_id ?? 0,
         material_name: item.material_variants?.materials_master?.material_name || 'Unknown',
         variant_name: item.material_variants?.variant_name || 'Unknown',
         quantity_used: item.quantity_used,
+        quantity_per_unit: item.material_variants?.quantity_per_unit ?? 1,
         metric: item.material_variants?.materials_master?.metric || '',
         used_date: item.used_date,
         notes: item.notes,
@@ -147,10 +161,17 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
     }
   };
 
+  const getInventoryRow = (variantId: number) =>
+    projectInventory.find(pi => pi.variant_id === variantId);
+
+  const getAvailableUnits = (variantId: number) => {
+    const inv = getInventoryRow(variantId);
+    return inv ? inv.available_units : 0;
+  };
+
   const handleMaterialChange = (materialId: string) => {
     setForm({ ...form, material_id: materialId, variant_id: '', units_used: '' });
     setSelectedVariant(null);
-    // Only show variants that have inventory in this project
     const filtered = variants.filter(v => {
       if (v.material_id !== parseInt(materialId)) return false;
       const inv = projectInventory.find(pi => pi.variant_id === v.variant_id);
@@ -172,10 +193,74 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
     return units * selectedVariant.quantity_per_unit;
   };
 
-  const getAvailableUnits = (variantId: number) => {
-    const inv = projectInventory.find(pi => pi.variant_id === variantId);
-    return inv ? inv.available_units : 0;
+  // ─── helpers to sync project_inventory ───────────────────────────────────────
+
+  const notifyInventoryUpdated = () => {
+    window.dispatchEvent(
+      new CustomEvent('inventory-updated', { detail: { projectId } })
+    );
   };
+
+  const adjustInventory = async (
+    variantId: number,
+    deltaUnits: number  // positive = more used, negative = restoring
+  ) => {
+    // Always fetch fresh from DB — never rely on potentially stale React state
+    const { data: fresh, error: fetchErr } = await supabase
+      .from('project_inventory')
+      .select('used_units, available_units')
+      .eq('project_id', parseInt(projectId))
+      .eq('variant_id', variantId)
+      .single();
+
+    if (fetchErr || !fresh) {
+      console.error('adjustInventory: row not found for variant', variantId, fetchErr);
+      return;
+    }
+
+    const newUsed      = Number(fresh.used_units)      + deltaUnits;
+    const newAvailable = Number(fresh.available_units) - deltaUnits;
+
+    const { error } = await supabase
+      .from('project_inventory')
+      .update({
+        used_units:      newUsed,
+        available_units: newAvailable,
+      })
+      .eq('project_id', parseInt(projectId))
+      .eq('variant_id', variantId);
+
+    if (error) {
+      console.error('Inventory sync error:', error);
+    } else {
+      notifyInventoryUpdated();
+    }
+  };
+
+  const logMovement = async (
+    materialId: number,
+    variantId: number,
+    movementType: 'Project Out' | 'Project In',
+    quantityMetric: number,
+    numUnits: number,
+    notes: string,
+    userId: string | null
+  ) => {
+    const { error } = await supabase.from('material_movement_logs').insert({
+      material_id: materialId,
+      variant_id: variantId,
+      movement_type: movementType,
+      project_id: parseInt(projectId),
+      quantity: quantityMetric,
+      number_of_units: numUnits,
+      reference_type: 'Manual Adjustment',
+      notes,
+      created_by: userId,
+    });
+    if (error) console.error('Movement log error:', error);
+  };
+
+  // ─── Insert ───────────────────────────────────────────────────────────────────
 
   const handleSave = async () => {
     try {
@@ -195,61 +280,177 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
         return;
       }
 
-      // Check against available inventory
       const available = getAvailableUnits(selectedVariant.variant_id);
       if (units > available) {
-        toast.error(`Only ${available.toFixed(2)} units available in project inventory. You're trying to use ${units} units.`);
+        toast.error(`Only ${available.toFixed(2)} units available. You are trying to use ${units} units.`);
         return;
       }
 
       const calculatedQuantity = units * selectedVariant.quantity_per_unit;
+      const matName = materials.find(m => m.material_id === selectedVariant.material_id);
 
-      // Get current user
       const { data: userData } = await supabase.auth.getUser();
       const userId = userData.user?.id || null;
 
-      const payload = {
+      const { error } = await supabase.from('project_stock_used').insert({
         project_id: parseInt(projectId),
         variant_id: parseInt(form.variant_id),
         quantity_used: calculatedQuantity,
         used_date: form.used_date,
         notes: form.notes.trim() || null,
-        recorded_by: userId
-      };
-
-      const { error } = await supabase
-        .from('project_stock_used')
-        .insert(payload);
+        recorded_by: userId,
+      });
 
       if (error) throw error;
 
-      toast.success(`Stock usage recorded: ${units} units = ${calculatedQuantity.toFixed(2)} ${materials.find(m => m.material_id === selectedVariant.material_id)?.metric}`);
+      // Sync project inventory
+      await adjustInventory(selectedVariant.variant_id, units);
+
+      // Log the outward movement
+      await logMovement(
+        selectedVariant.material_id,
+        selectedVariant.variant_id,
+        'Project Out',
+        calculatedQuantity,
+        units,
+        `Stock usage recorded: ${units} units = ${calculatedQuantity.toFixed(2)} ${matName?.metric ?? ''}${form.notes ? ' | ' + form.notes : ''}`,
+        userId
+      );
+
+      toast.success(`Stock usage recorded: ${units} units = ${calculatedQuantity.toFixed(2)} ${matName?.metric ?? ''}`);
       setIsDialogOpen(false);
       resetForm();
       fetchStockUsed();
-      fetchProjectInventory(); // Refresh inventory
+      fetchProjectInventory();
     } catch (error: any) {
       console.error('Error saving stock used:', error);
       toast.error('Failed to record stock usage: ' + error.message);
     }
   };
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this record?')) return;
+  // ─── Edit ─────────────────────────────────────────────────────────────────────
 
+  const openEdit = (item: StockUsedItem) => {
+    setEditing(item);
+    const currentUnits = item.quantity_per_unit > 0
+      ? item.quantity_used / item.quantity_per_unit
+      : item.quantity_used;
+    setEditForm({
+      units_used: currentUnits.toString(),
+      notes: item.notes || '',
+      used_date: item.used_date,
+    });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleUpdate = async () => {
+    if (!editing) return;
     try {
+      const newUnits = parseFloat(editForm.units_used);
+      if (isNaN(newUnits) || newUnits <= 0) {
+        toast.error('Please enter valid number of units');
+        return;
+      }
+
+      const oldUnits = editing.quantity_per_unit > 0
+        ? editing.quantity_used / editing.quantity_per_unit
+        : editing.quantity_used;
+
+      const deltaUnits = newUnits - oldUnits;
+
+      // Check inventory constraint only if increasing usage
+      if (deltaUnits > 0) {
+        const available = getAvailableUnits(editing.variant_id);
+        if (deltaUnits > available) {
+          toast.error(`Only ${available.toFixed(2)} additional units available in project inventory.`);
+          return;
+        }
+      }
+
+      const newQuantityMetric = newUnits * editing.quantity_per_unit;
+
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id || null;
+
+      // Update the stock used record
       const { error } = await supabase
         .from('project_stock_used')
-        .delete()
-        .eq('id', id);
+        .update({
+          quantity_used: newQuantityMetric,
+          used_date: editForm.used_date,
+          notes: editForm.notes.trim() || null,
+        })
+        .eq('id', editing.id);
 
       if (error) throw error;
 
-      toast.success('Record deleted successfully');
+      // Sync project inventory if quantity changed
+      if (Math.abs(deltaUnits) > 0.0001) {
+        await adjustInventory(editing.variant_id, deltaUnits);
+
+        const deltaQty = newQuantityMetric - editing.quantity_used;
+        await logMovement(
+          editing.material_id,
+          editing.variant_id,
+          deltaUnits > 0 ? 'Project Out' : 'Project In',
+          Math.abs(deltaQty),
+          Math.abs(deltaUnits),
+          `Stock usage updated: ${deltaUnits > 0 ? '+' : ''}${deltaUnits.toFixed(3)} units (${deltaQty > 0 ? '+' : ''}${deltaQty.toFixed(2)} ${editing.metric})`,
+          userId
+        );
+      }
+
+      toast.success('Stock usage updated');
+      setIsEditDialogOpen(false);
+      setEditing(null);
       fetchStockUsed();
+      fetchProjectInventory();
+    } catch (error: any) {
+      console.error('Error updating stock used:', error);
+      toast.error('Failed to update: ' + error.message);
+    }
+  };
+
+  // ─── Delete ───────────────────────────────────────────────────────────────────
+
+  const handleDelete = async (item: StockUsedItem) => {
+    if (!confirm(`Delete usage of ${item.quantity_used} ${item.metric} (${item.material_name} - ${item.variant_name})? This will restore the quantity to project inventory.`)) return;
+
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const userId = userData.user?.id || null;
+
+      const { error } = await supabase
+        .from('project_stock_used')
+        .delete()
+        .eq('id', item.id);
+
+      if (error) throw error;
+
+      // Restore inventory (reverse the usage)
+      const unitsToRestore = item.quantity_per_unit > 0
+        ? item.quantity_used / item.quantity_per_unit
+        : item.quantity_used;
+
+      await adjustInventory(item.variant_id, -unitsToRestore);
+
+      // Log the reversal as inward movement
+      await logMovement(
+        item.material_id,
+        item.variant_id,
+        'Project In',
+        item.quantity_used,
+        unitsToRestore,
+        `Stock usage record deleted — ${item.quantity_used} ${item.metric} restored to project inventory`,
+        userId
+      );
+
+      toast.success('Record deleted and inventory restored');
+      fetchStockUsed();
+      fetchProjectInventory();
     } catch (error: any) {
       console.error('Error deleting record:', error);
-      toast.error('Failed to delete record');
+      toast.error('Failed to delete record: ' + error.message);
     }
   };
 
@@ -283,7 +484,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                 Stock Used - Materials Consumed
               </CardTitle>
               <p className="text-sm text-slate-600 mt-1">
-                Track materials that have been actually used/consumed in this project (supports decimal quantities)
+                Track materials consumed in this project. Changes automatically sync project inventory and movement logs.
               </p>
             </div>
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -316,8 +517,8 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
 
                   <div className="space-y-2">
                     <Label>Variant *</Label>
-                    <Select 
-                      value={form.variant_id} 
+                    <Select
+                      value={form.variant_id}
                       onValueChange={handleVariantChange}
                       disabled={!form.material_id}
                     >
@@ -331,7 +532,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                           filteredVariants.map(v => (
                             <SelectItem key={v.variant_id} value={v.variant_id.toString()}>
                               {v.variant_name} ({v.quantity_per_unit} {materials.find(m => m.material_id === v.material_id)?.metric})
-                              {' - '}Available: {getAvailableUnits(v.variant_id).toFixed(2)} units
+                              {' — '}Available: {getAvailableUnits(v.variant_id).toFixed(2)} units
                             </SelectItem>
                           ))
                         )}
@@ -340,10 +541,10 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Number of Units Used * (e.g., 0.5 = half unit, 2.75 = 2.75 units)</Label>
+                    <Label>Units Used * (e.g., 0.5 = half unit)</Label>
                     {selectedVariant && (
                       <div className="text-xs text-slate-600 bg-green-50 border border-green-200 rounded px-2 py-1 mb-2">
-                        Available: <span className="font-bold text-green-700">{getAvailableUnits(selectedVariant.variant_id).toFixed(2)} units</span> in project inventory
+                        Available: <span className="font-bold text-green-700">{getAvailableUnits(selectedVariant.variant_id).toFixed(2)} units</span>
                       </div>
                     )}
                     <Input
@@ -358,8 +559,10 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                     />
                     {selectedVariant && form.units_used && (
                       <div className="text-sm text-slate-600 bg-blue-50 border border-blue-200 rounded p-2">
-                        <strong>Calculated:</strong> {form.units_used} × {selectedVariant.quantity_per_unit} {materials.find(m => m.material_id === selectedVariant.material_id)?.metric} = {' '}
-                        <span className="font-bold text-blue-700">{getCalculatedQuantity().toFixed(2)} {materials.find(m => m.material_id === selectedVariant.material_id)?.metric}</span>
+                        <strong>Calculated:</strong> {form.units_used} × {selectedVariant.quantity_per_unit} {materials.find(m => m.material_id === selectedVariant.material_id)?.metric} ={' '}
+                        <span className="font-bold text-blue-700">
+                          {getCalculatedQuantity().toFixed(2)} {materials.find(m => m.material_id === selectedVariant.material_id)?.metric}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -389,10 +592,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                       Record Usage
                     </Button>
                     <Button
-                      onClick={() => {
-                        setIsDialogOpen(false);
-                        resetForm();
-                      }}
+                      onClick={() => { setIsDialogOpen(false); resetForm(); }}
                       variant="outline"
                       className="flex-1"
                     >
@@ -436,46 +636,150 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                   <TableRow>
                     <TableHead>Material</TableHead>
                     <TableHead>Variant</TableHead>
-                    <TableHead className="text-center">Quantity Used</TableHead>
+                    <TableHead className="text-center w-[90px]">Units Used</TableHead>
+                    <TableHead className="text-center">Qty Used</TableHead>
                     <TableHead>Date Used</TableHead>
                     <TableHead>Notes</TableHead>
-                    <TableHead className="text-center">Actions</TableHead>
+                    <TableHead className="text-center w-[90px]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredStockUsed.map((item) => (
+                  {filteredStockUsed.map((item) => {
+                    const unitsUsed = item.quantity_per_unit > 0
+                      ? item.quantity_used / item.quantity_per_unit
+                      : item.quantity_used;
+                    return (
                     <TableRow key={item.id} className="hover:bg-slate-50">
                       <TableCell className="font-medium">{item.material_name}</TableCell>
                       <TableCell>{item.variant_name}</TableCell>
                       <TableCell className="text-center">
-                        <Badge variant="secondary">
-                          {item.quantity_used} {item.metric}
+                        <Badge variant="outline" className="text-blue-700 border-blue-300">
+                          {unitsUsed % 1 === 0 ? unitsUsed : unitsUsed.toFixed(3)}
                         </Badge>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Badge variant="secondary">{item.quantity_used} {item.metric}</Badge>
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">
                         {new Date(item.used_date).toLocaleDateString()}
                       </TableCell>
-                      <TableCell className="text-sm text-slate-600">
-                        {item.notes || '—'}
-                      </TableCell>
+                      <TableCell className="text-sm text-slate-600">{item.notes || '—'}</TableCell>
                       <TableCell className="text-center">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleDelete(item.id)}
-                          className="h-8 w-8 p-0"
-                        >
-                          <Trash2 className="h-4 w-4 text-red-600" />
-                        </Button>
+                        <div className="flex justify-center gap-1">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(item)}
+                            className="h-8 w-8 p-0"
+                            title="Edit"
+                          >
+                            <Edit className="h-4 w-4 text-blue-600" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleDelete(item)}
+                            className="h-8 w-8 p-0"
+                            title="Delete"
+                          >
+                            <Trash2 className="h-4 w-4 text-red-600" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Edit Dialog */}
+      <Dialog open={isEditDialogOpen} onOpenChange={(open) => { setIsEditDialogOpen(open); if (!open) setEditing(null); }}>
+        <DialogContent className="bg-white max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Stock Usage</DialogTitle>
+          </DialogHeader>
+          {editing && (
+            <div className="space-y-4">
+              <div className="p-3 bg-slate-50 rounded-lg text-sm text-slate-700">
+                <div className="font-medium">{editing.material_name} — {editing.variant_name}</div>
+                <div className="text-xs text-slate-500 mt-1">
+                  1 unit = {editing.quantity_per_unit} {editing.metric} &nbsp;|&nbsp;
+                  Currently: {editing.quantity_used} {editing.metric}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Units Used *</Label>
+                {(() => {
+                  const inv = getInventoryRow(editing.variant_id);
+                  const currentUnits = editing.quantity_per_unit > 0
+                    ? editing.quantity_used / editing.quantity_per_unit
+                    : editing.quantity_used;
+                  const maxAllowed = currentUnits + (inv ? inv.available_units : 0);
+                  return (
+                    <>
+                      <div className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
+                        Can increase by up to <strong>{inv ? inv.available_units.toFixed(2) : '0'}</strong> more units (currently using {currentUnits.toFixed(3)})
+                      </div>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        max={maxAllowed}
+                        value={editForm.units_used}
+                        onChange={(e) => setEditForm({ ...editForm, units_used: e.target.value })}
+                        className="bg-white"
+                      />
+                      {editForm.units_used && !isNaN(parseFloat(editForm.units_used)) && (
+                        <div className="text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+                          New quantity: {(parseFloat(editForm.units_used) * editing.quantity_per_unit).toFixed(2)} {editing.metric}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+              </div>
+
+              <div className="space-y-2">
+                <Label>Date Used *</Label>
+                <Input
+                  type="date"
+                  value={editForm.used_date}
+                  onChange={(e) => setEditForm({ ...editForm, used_date: e.target.value })}
+                  className="bg-white"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Input
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                  placeholder="e.g., Used for painting walls"
+                  className="bg-white"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button onClick={handleUpdate} className="flex-1 bg-blue-600 hover:bg-blue-700">
+                  Save Changes
+                </Button>
+                <Button
+                  onClick={() => { setIsEditDialogOpen(false); setEditing(null); }}
+                  variant="outline"
+                  className="flex-1"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

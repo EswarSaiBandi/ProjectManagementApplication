@@ -27,7 +27,7 @@ function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-export default function MoodboardTab({ projectId }: { projectId: string }) {
+export default function MoodboardTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
 
   const [items, setItems] = useState<MoodboardItemWithUrl[]>([]);
@@ -173,11 +173,13 @@ export default function MoodboardTab({ projectId }: { projectId: string }) {
               }
             }}
           >
-            <DialogTrigger asChild>
-              <Button onClick={() => setIsOpen(true)} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
-                <Plus className="h-4 w-4 mr-2" /> Add Image
-              </Button>
-            </DialogTrigger>
+            {!readOnly && (
+              <DialogTrigger asChild>
+                <Button onClick={() => setIsOpen(true)} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
+                  <Plus className="h-4 w-4 mr-2" /> Add Image
+                </Button>
+              </DialogTrigger>
+            )}
             <DialogContent className="bg-white">
               <DialogHeader>
                 <DialogTitle>Add Moodboard Image</DialogTitle>
@@ -233,9 +235,11 @@ export default function MoodboardTab({ projectId }: { projectId: string }) {
                       <div className="font-medium text-slate-900 truncate">{it.title || "Untitled"}</div>
                       <div className="text-xs text-slate-500">{new Date(it.created_at).toLocaleString()}</div>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => handleDelete(it)} title="Delete">
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {!readOnly && (
+                      <Button variant="outline" size="sm" onClick={() => handleDelete(it)} title="Delete">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               ))}

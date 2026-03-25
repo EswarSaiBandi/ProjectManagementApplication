@@ -50,7 +50,7 @@ export default function MaterialsManagementPage() {
     material_id: null as number | null,
     material_name: '',
     description: '',
-    metric: ''
+    metric: '',
   });
   
   const [variantForm, setVariantForm] = useState({
@@ -72,7 +72,7 @@ export default function MaterialsManagementPage() {
     }
   }, [metricOptions, materialForm.metric]);
 
-  const fetchMetricOptions = async () => {
+  const fetchMetricOptions = async (): Promise<string[]> => {
     try {
       const { data, error } = await supabase
         .from('dynamic_field_options')
@@ -87,10 +87,13 @@ export default function MaterialsManagementPage() {
         .map((row: { option_value: string }) => row.option_value?.trim())
         .filter((value): value is string => Boolean(value));
 
-      setMetricOptions(Array.from(new Set(options)));
+      const uniqueOptions = Array.from(new Set(options));
+      setMetricOptions(uniqueOptions);
+      return uniqueOptions;
     } catch (error: any) {
       toast.error('Failed to load material metrics: ' + error.message);
       setMetricOptions([]);
+      return [];
     }
   };
 
@@ -236,12 +239,18 @@ export default function MaterialsManagementPage() {
     }
   };
 
-  const handleEditMaterial = (material: Material) => {
+  const handleEditMaterial = async (material: Material) => {
+    const latestOptions = await fetchMetricOptions();
+    const mergedOptions = latestOptions.includes(material.metric)
+      ? latestOptions
+      : [material.metric, ...latestOptions];
+    setMetricOptions(mergedOptions);
+
     setMaterialForm({
       material_id: material.material_id,
       material_name: material.material_name,
       description: material.description || '',
-      metric: material.metric
+      metric: material.metric,
     });
     setIsMaterialDialogOpen(true);
   };
@@ -326,7 +335,7 @@ export default function MaterialsManagementPage() {
       material_id: null,
       material_name: '',
       description: '',
-      metric: metricOptions[0] || ''
+      metric: metricOptions[0] || '',
     });
   };
 
@@ -339,8 +348,12 @@ export default function MaterialsManagementPage() {
     });
   };
 
-  const openNewMaterial = () => {
+  const openNewMaterial = async () => {
+    const latestOptions = await fetchMetricOptions();
     resetMaterialForm();
+    if (latestOptions.length > 0) {
+      setMaterialForm((prev) => ({ ...prev, metric: latestOptions[0] }));
+    }
     setIsMaterialDialogOpen(true);
   };
 

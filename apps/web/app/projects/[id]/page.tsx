@@ -27,9 +27,17 @@ import DetailsTab from "@/components/project-tabs/DetailsTab";
 import ExcessMaterialsTab from "@/components/project-tabs/ExcessMaterialsTab";
 import MaterialMovementsTab from "@/components/project-tabs/MaterialMovementsTab";
 import ProjectCostingTab from "@/components/project-tabs/ProjectCostingTab";
+import ProjectMembersTab from "@/components/project-tabs/ProjectMembersTab";
+import { useRole } from "@/hooks/useRole";
 
 export default function ProjectDetailsPage({ params }: { params: { id: string } }) {
-    const [activeTab, setActiveTab] = useState("project-costing");
+    const { role, isClient, loading: roleLoading } = useRole();
+    const [activeTab, setActiveTab] = useState('activities');
+
+    // Set default tab once role is known
+    useEffect(() => {
+        if (role === 'Admin') setActiveTab('project-costing');
+    }, [role]);
     const [project, setProject] = useState<any>({
         name: "Loading...",
         code: "...",
@@ -72,28 +80,34 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
         return <div className="p-10 text-red-600">Failed to load project: {error}</div>;
     }
 
-    const tabs = [
-        { label: "Project Costing", icon: Calculator, value: "project-costing" },
-        { label: "Financials", icon: Banknote, value: "financials" },
-        { label: "Inventory", icon: Package, value: "inventory" },
-        { label: "Material Movements", icon: ArrowDownUp, value: "material-movements" },
-        { label: "Stock Used", icon: Box, value: "stock-used" },
-        { label: "Excess Materials", icon: Recycle, value: "excess-materials" },
-        { label: "Manpower", icon: Users, value: "manpower" },
-        { label: "Activities", icon: Activity, value: "activities" },
-        { label: "Client Progress", icon: PieChart, value: "client-progress" },
-        { label: "Tasks", icon: ListTodo, value: "tasks" },
-        { label: "Quotes", icon: Percent, value: "quotes" },
-        { label: "Orders", icon: Triangle, value: "orders" },
-        { label: "Invoices", icon: FileText, value: "invoices" },
-        { label: "Material Request", icon: ShoppingBag, value: "purchase-request" },
-        { label: "Checklists", icon: ClipboardCheck, value: "checklists" },
-        { label: "Files", icon: File, value: "files" },
-        { label: "Moodboard", icon: Image, value: "moodboard" },
-        { label: "Notes", icon: StickyNote, value: "notes" },
-        { label: "StudioAI", icon: Sparkles, value: "studio-ai", special: true },
-        { label: "Details", icon: Info, value: "details" },
+    // Tabs visible per role
+    const allTabs = [
+        { label: "Project Costing",    icon: Calculator,    value: "project-costing",      roles: ['Admin'] },
+        { label: "Financials",         icon: Banknote,      value: "financials",            roles: ['Admin','ProjectManager'] },
+        { label: "Inventory",          icon: Package,       value: "inventory",             roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Material Movements", icon: ArrowDownUp,   value: "material-movements",    roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Stock Used",         icon: Box,           value: "stock-used",            roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Excess Materials",   icon: Recycle,       value: "excess-materials",      roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Manpower",           icon: Users,         value: "manpower",              roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Activities",         icon: Activity,      value: "activities",            roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Client Progress",    icon: PieChart,      value: "client-progress",       roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Tasks",              icon: ListTodo,      value: "tasks",                 roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Quotes",             icon: Percent,       value: "quotes",                roles: ['Admin','ProjectManager'] },
+        { label: "Orders",             icon: Triangle,      value: "orders",                roles: ['Admin','ProjectManager'] },
+        { label: "Invoices",           icon: FileText,      value: "invoices",              roles: ['Admin','ProjectManager'] },
+        { label: "Material Request",   icon: ShoppingBag,   value: "purchase-request",      roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Checklists",         icon: ClipboardCheck,value: "checklists",            roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Files",              icon: File,          value: "files",                 roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Moodboard",          icon: Image,         value: "moodboard",             roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Notes",              icon: StickyNote,    value: "notes",                 roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "StudioAI",           icon: Sparkles,      value: "studio-ai",             roles: ['Admin','ProjectManager'], special: true },
+        { label: "Details",            icon: Info,          value: "details",               roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
+        { label: "Members",            icon: Users,         value: "members",               roles: ['Admin','ProjectManager'] },
     ];
+
+    const tabs = roleLoading || !role
+        ? []
+        : allTabs.filter(t => t.roles.includes(role));
 
     return (
         <div className="space-y-6">
@@ -143,41 +157,28 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                     {activeTab === 'stock-used' && <StockUsedTab projectId={params.id} />}
                     {activeTab === 'excess-materials' && <ExcessMaterialsTab projectId={params.id} />}
                     {activeTab === 'manpower' && <ManpowerTab projectId={params.id} />}
-                    {activeTab === 'activities' && <ActivitiesTab projectId={params.id} />}
-                    {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} />}
-                    {activeTab === 'tasks' && <TasksTab projectId={params.id} />}
+                    {activeTab === 'activities' && <ActivitiesTab projectId={params.id} readOnly={isClient} />}
+                    {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} readOnly={isClient} />}
+                    {activeTab === 'tasks' && <TasksTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'quotes' && <QuotesTab projectId={params.id} />}
                     {activeTab === 'orders' && <OrdersTab projectId={params.id} />}
                     {activeTab === 'invoices' && <InvoicesTab projectId={params.id} />}
                     {activeTab === 'purchase-request' && <MaterialRequestTab projectId={params.id} />}
-                    {activeTab === 'checklists' && <ChecklistsTab projectId={params.id} />}
-                    {activeTab === 'files' && <FilesTab projectId={params.id} />}
-                    {activeTab === 'moodboard' && <MoodboardTab projectId={params.id} />}
+                    {activeTab === 'checklists' && <ChecklistsTab projectId={params.id} readOnly={isClient} />}
+                    {activeTab === 'files' && <FilesTab projectId={params.id} readOnly={isClient} />}
+                    {activeTab === 'moodboard' && <MoodboardTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'notes' && <NotesTab projectId={params.id} />}
-                    {activeTab === 'details' && <DetailsTab projectId={params.id} />}
+                    {activeTab === 'details' && <DetailsTab projectId={params.id} readOnly={isClient} />}
+                    {activeTab === 'members' && <ProjectMembersTab projectId={params.id} />}
 
-                    {/* Placeholder for other tabs (Coming Soon) */}
+                    {/* Placeholder for unimplemented tabs */}
                     {tabs.filter(t =>
                         ![
-                            'project-costing',
-                            'financials',
-                            'inventory',
-                            'material-movements',
-                            'stock-used',
-                            'excess-materials',
-                            'manpower',
-                            'activities',
-                            'client-progress',
-                            'tasks',
-                            'quotes',
-                            'orders',
-                            'invoices',
-                            'purchase-request',
-                            'checklists',
-                            'files',
-                            'moodboard',
-                            'notes',
-                            'details'
+                            'project-costing','financials','inventory','material-movements',
+                            'stock-used','excess-materials','manpower','activities',
+                            'client-progress','tasks','quotes','orders','invoices',
+                            'purchase-request','checklists','files','moodboard','notes',
+                            'details','members'
                         ].includes(t.value)
                     ).map(tab => (
                         activeTab === tab.value && (
@@ -189,12 +190,6 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                             </div>
                         )
                     ))}
-
-                    {/* Activities Tab Content */}
-                    {activeTab === 'activities' && <ActivitiesTab projectId={params.id} />}
-
-                    {/* Client Progress Tab Content */}
-                    {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} />}
                 </div>
             </Tabs>
         </div>

@@ -12,9 +12,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import { 
   Calculator, Plus, TrendingUp, TrendingDown, DollarSign, 
-  AlertCircle, CheckCircle, Package, Users, Wrench 
+  AlertCircle, CheckCircle, Package, Users, UserCheck, Building2,
+  Pencil, Trash2
 } from 'lucide-react';
 
 type CostSummary = {
@@ -41,15 +43,45 @@ type BudgetEntry = {
   created_at: string;
 };
 
+type ManpowerCostRow = {
+  id: number;
+  labour_type: 'In-House' | 'Outsourced';
+  start_date: string | null;
+  end_date: string | null;
+  bandwidth_pct: number | null;
+  daily_wage: number | null;
+  incentive: number | null;
+  labour: { name: string; designation: string | null; monthly_salary: number | null } | null;
+};
+
+function workingDays(start: string, end: string) {
+  return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1;
+}
+
+function calcManpowerCost(r: ManpowerCostRow): number {
+  if (!r.start_date || !r.end_date) return 0;
+  const days = workingDays(r.start_date, r.end_date);
+  if (r.labour_type === 'In-House') {
+    const salary = r.labour?.monthly_salary ?? 0;
+    const bw = r.bandwidth_pct ?? 0;
+    return (salary / 24) * (bw / 100) * days;
+  }
+  return (r.daily_wage ?? 0) * days + (r.incentive ?? 0);
+}
+
+const fmt = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
+
 export default function ProjectCostingTab({ projectId }: { projectId: string }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
 
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [budgetEntries, setBudgetEntries] = useState<BudgetEntry[]>([]);
+  const [manpowerRows, setManpowerRows] = useState<ManpowerCostRow[]>([]);
   const [costCategories, setCostCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [editing, setEditing] = useState<BudgetEntry | null>(null);
 
   const [form, setForm] = useState({
     cost_category: 'Material',
@@ -94,22 +126,51 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
   const fetchBudgetEntries = async () => {
     if (!Number.isFinite(numericProjectId)) return;
-
     const { data, error } = await supabase
       .from('project_cost_ledger')
       .select('*')
       .eq('project_id', numericProjectId)
       .order('cost_date', { ascending: false });
+    if (!error && data) setBudgetEntries(data as BudgetEntry[]);
+  };
 
-    if (!error && data) {
-      setBudgetEntries(data as BudgetEntry[]);
+  const fetchManpowerCosts = async () => {
+    if (!Number.isFinite(numericProjectId)) return;
+    const { data: pmRows } = await supabase
+      .from('project_manpower')
+      .select('id, labour_type, labor_type, start_date, end_date, bandwidth_pct, daily_wage, incentive, labour_id')
+      .eq('project_id', numericProjectId)
+      .order('created_at', { ascending: false });
+
+    if (!pmRows || pmRows.length === 0) { setManpowerRows([]); return; }
+
+    const labourIds = [...new Set(pmRows.map((r: any) => r.labour_id).filter(Boolean))];
+    let labourMap: Record<number, any> = {};
+    if (labourIds.length > 0) {
+      const { data: lRows } = await supabase
+        .from('labour_master')
+        .select('id, name, designation, monthly_salary')
+        .in('id', labourIds);
+      (lRows || []).forEach((l: any) => { labourMap[l.id] = l; });
     }
+
+    setManpowerRows(pmRows.map((r: any) => ({
+      id: r.id,
+      labour_type: r.labour_type ?? r.labor_type ?? 'In-House',
+      start_date: r.start_date,
+      end_date: r.end_date,
+      bandwidth_pct: r.bandwidth_pct,
+      daily_wage: r.daily_wage,
+      incentive: r.incentive,
+      labour: r.labour_id ? labourMap[r.labour_id] ?? null : null,
+    })));
   };
 
   useEffect(() => {
     fetchCostingSummary();
     fetchBudgetEntries();
     fetchCostCategories();
+    fetchManpowerCosts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numericProjectId]);
 
@@ -123,55 +184,89 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   };
 
   const openNew = () => {
+    setEditing(null);
     resetForm();
+    setIsOpen(true);
+  };
+
+  const openEdit = (entry: BudgetEntry) => {
+    setEditing(entry);
+    setForm({
+      cost_category: entry.cost_category,
+      amount: String(entry.amount),
+      description: entry.description || '',
+      cost_date: entry.cost_date.split('T')[0],
+    });
     setIsOpen(true);
   };
 
   const handleSave = async () => {
     if (isSaving) return;
-    if (!Number.isFinite(numericProjectId)) {
-      toast.error('Invalid project');
-      return;
-    }
-
+    if (!Number.isFinite(numericProjectId)) { toast.error('Invalid project'); return; }
     const amount = Number(form.amount);
-    if (!amount || amount <= 0) {
-      toast.error('Amount must be greater than 0');
-      return;
-    }
+    if (!amount || amount <= 0) { toast.error('Amount must be greater than 0'); return; }
+    if (!form.cost_date) { toast.error('Date is required'); return; }
 
     setIsSaving(true);
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id ?? null;
 
-    const payload = {
-      project_id: numericProjectId,
-      cost_category: form.cost_category,
-      cost_type: 'Budgeted',
-      amount: amount,
-      description: form.description.trim() || null,
-      cost_date: form.cost_date,
-      created_by: userId,
-    };
-
-    const { error } = await supabase.from('project_cost_ledger').insert([payload]);
-    if (error) {
-      console.error('Insert budget error:', error);
-      toast.error(error.message || 'Failed to add budget entry');
-      setIsSaving(false);
-      return;
+    if (editing) {
+      const { error } = await supabase
+        .from('project_cost_ledger')
+        .update({
+          cost_category: form.cost_category,
+          amount,
+          description: form.description.trim() || null,
+          cost_date: form.cost_date,
+        })
+        .eq('ledger_id', editing.ledger_id);
+      if (error) { toast.error(error.message || 'Failed to update'); setIsSaving(false); return; }
+      toast.success('Budget entry updated');
+    } else {
+      const { error } = await supabase.from('project_cost_ledger').insert([{
+        project_id: numericProjectId,
+        cost_category: form.cost_category,
+        cost_type: 'Budgeted',
+        amount,
+        description: form.description.trim() || null,
+        cost_date: form.cost_date,
+        created_by: userId,
+      }]);
+      if (error) { toast.error(error.message || 'Failed to add'); setIsSaving(false); return; }
+      toast.success('Budget entry added');
     }
 
-    toast.success('Budget entry added');
     setIsOpen(false);
+    setEditing(null);
     resetForm();
     await fetchCostingSummary();
     await fetchBudgetEntries();
     setIsSaving(false);
   };
 
-  const totalLaborCost = (costSummary?.labor_cost_inhouse || 0) + (costSummary?.labor_cost_outsourced || 0);
-  const variancePercent = costSummary?.budgeted_total 
+  const handleDelete = async (entry: BudgetEntry) => {
+    if (!confirm(`Delete budget entry of ₹${Number(entry.amount).toLocaleString('en-IN')} (${entry.cost_category})?`)) return;
+    const { error } = await supabase.from('project_cost_ledger').delete().eq('ledger_id', entry.ledger_id);
+    if (error) { toast.error(error.message || 'Failed to delete'); return; }
+    toast.success('Deleted');
+    await fetchCostingSummary();
+    await fetchBudgetEntries();
+  };
+
+  // Compute manpower costs client-side for the breakdown table
+  const inHouseRows    = manpowerRows.filter(r => r.labour_type === 'In-House');
+  const outsourcedRows = manpowerRows.filter(r => r.labour_type === 'Outsourced');
+  const clientInHouseCost    = inHouseRows.reduce((s, r) => s + calcManpowerCost(r), 0);
+  const clientOutsourcedCost = outsourcedRows.reduce((s, r) => s + calcManpowerCost(r), 0);
+  const clientTotalLabour    = clientInHouseCost + clientOutsourcedCost;
+
+  // Use view values when available, fall back to client-side calculation
+  const totalInHouseCost    = costSummary?.labor_cost_inhouse    ?? clientInHouseCost;
+  const totalOutsourcedCost = costSummary?.labor_cost_outsourced ?? clientOutsourcedCost;
+  const totalLaborCost      = totalInHouseCost + totalOutsourcedCost;
+
+  const variancePercent = costSummary?.budgeted_total
     ? ((costSummary.cost_variance / costSummary.budgeted_total) * 100).toFixed(1)
     : '0';
 
@@ -260,13 +355,13 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                   <div className="flex items-center gap-3">
                     <Users className="h-10 w-10 text-purple-500" />
                     <div>
-                      <div className="text-xs text-slate-600 mb-1">Labor Costs</div>
+                      <div className="text-xs text-slate-600 mb-1">Labour Costs</div>
                       <div className="text-xl font-bold text-purple-700">
-                        ₹{totalLaborCost.toLocaleString('en-IN')}
+                        {fmt(totalLaborCost)}
                       </div>
                       <div className="text-xs text-slate-500 mt-1">
-                        In-House: ₹{costSummary.labor_cost_inhouse.toLocaleString('en-IN')}<br/>
-                        Outsourced: ₹{costSummary.labor_cost_outsourced.toLocaleString('en-IN')}
+                        In-House: {fmt(totalInHouseCost)}<br/>
+                        Outsourced: {fmt(totalOutsourcedCost)}
                       </div>
                     </div>
                   </div>
@@ -292,12 +387,134 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
         </CardContent>
       </Card>
 
+      {/* Manpower Cost Breakdown */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Users className="h-5 w-5 text-purple-500" /> Manpower Cost Breakdown
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {manpowerRows.length === 0 ? (
+            <div className="py-8 text-center text-muted-foreground text-sm">
+              No labour assigned to this project yet. Add labour from the Manpower tab.
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* In-House */}
+              {inHouseRows.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <UserCheck className="h-4 w-4 text-blue-600" />
+                    <span className="font-semibold text-sm text-blue-700">In-House</span>
+                    <span className="ml-auto text-sm font-bold text-blue-700">{fmt(clientInHouseCost)}</span>
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Designation</TableHead>
+                        <TableHead className="w-[100px]">Bandwidth</TableHead>
+                        <TableHead className="w-[160px]">Period</TableHead>
+                        <TableHead className="w-[70px] text-center">Days</TableHead>
+                        <TableHead className="w-[110px]">Rate/Day</TableHead>
+                        <TableHead className="w-[120px] text-right">Est. Cost</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {inHouseRows.map(r => {
+                        const salary  = r.labour?.monthly_salary ?? 0;
+                        const bw      = r.bandwidth_pct ?? 0;
+                        const rateDay = salary ? (salary / 24) * (bw / 100) : null;
+                        const days    = r.start_date && r.end_date ? workingDays(r.start_date, r.end_date) : null;
+                        const cost    = calcManpowerCost(r);
+                        return (
+                          <TableRow key={r.id}>
+                            <TableCell className="font-medium">{r.labour?.name || '—'}</TableCell>
+                            <TableCell className="text-slate-600 text-sm">{r.labour?.designation || '—'}</TableCell>
+                            <TableCell><Badge className="bg-blue-100 text-blue-700">{bw}%</Badge></TableCell>
+                            <TableCell className="text-sm text-slate-600">
+                              {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN') : '—'} → {r.end_date ? new Date(r.end_date).toLocaleDateString('en-IN') : '—'}
+                            </TableCell>
+                            <TableCell className="text-center text-sm">{days ?? '—'}</TableCell>
+                            <TableCell className="text-sm">{rateDay ? fmt(rateDay) : '—'}</TableCell>
+                            <TableCell className="text-right font-semibold text-blue-700">{cost > 0 ? fmt(cost) : '—'}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {/* Outsourced */}
+              {outsourcedRows.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-2 mb-2 mt-2">
+                    <Building2 className="h-4 w-4 text-amber-600" />
+                    <span className="font-semibold text-sm text-amber-700">Outsourced</span>
+                    <span className="ml-auto text-sm font-bold text-amber-700">{fmt(clientOutsourcedCost)}</span>
+                  </div>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Designation</TableHead>
+                        <TableHead className="w-[160px]">Period</TableHead>
+                        <TableHead className="w-[70px] text-center">Days</TableHead>
+                        <TableHead className="w-[110px]">Daily Wage</TableHead>
+                        <TableHead className="w-[100px]">Incentive</TableHead>
+                        <TableHead className="w-[120px] text-right">Est. Cost</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {outsourcedRows.map(r => {
+                        const days = r.start_date && r.end_date ? workingDays(r.start_date, r.end_date) : null;
+                        const cost = calcManpowerCost(r);
+                        return (
+                          <TableRow key={r.id}>
+                            <TableCell className="font-medium">{r.labour?.name || '—'}</TableCell>
+                            <TableCell className="text-slate-600 text-sm">{r.labour?.designation || '—'}</TableCell>
+                            <TableCell className="text-sm text-slate-600">
+                              {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN') : '—'} → {r.end_date ? new Date(r.end_date).toLocaleDateString('en-IN') : '—'}
+                            </TableCell>
+                            <TableCell className="text-center text-sm">{days ?? '—'}</TableCell>
+                            <TableCell className="text-sm">{r.daily_wage ? fmt(r.daily_wage) : '—'}</TableCell>
+                            <TableCell className="text-sm">{r.incentive ? fmt(r.incentive) : '—'}</TableCell>
+                            <TableCell className="text-right font-semibold text-amber-700">{cost > 0 ? fmt(cost) : '—'}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {/* Total labour summary bar */}
+              <div className="mt-3 p-3 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-between">
+                <div className="text-sm font-medium text-purple-800">Total Labour Cost (In-House + Outsourced)</div>
+                <div className="text-lg font-bold text-purple-700">{fmt(clientTotalLabour)}</div>
+              </div>
+              {clientTotalLabour > 0 && costSummary?.budgeted_total && costSummary.budgeted_total > 0 && (
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Labour as % of budget</span>
+                    <span>{((clientTotalLabour / costSummary.budgeted_total) * 100).toFixed(1)}%</span>
+                  </div>
+                  <Progress value={Math.min((clientTotalLabour / costSummary.budgeted_total) * 100, 100)} className="h-1.5" />
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Budget Management */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">Budget Entries</CardTitle>
-            <Dialog open={isOpen} onOpenChange={setIsOpen}>
+            <Dialog open={isOpen} onOpenChange={(o) => { setIsOpen(o); if (!o) { setEditing(null); resetForm(); } }}>
               <DialogTrigger asChild>
                 <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
                   <Plus className="h-4 w-4 mr-2" /> Add Budget
@@ -305,7 +522,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
               </DialogTrigger>
               <DialogContent className="bg-white max-w-xl">
                 <DialogHeader>
-                  <DialogTitle>Add Budget Entry</DialogTitle>
+                  <DialogTitle>{editing ? 'Edit Budget Entry' : 'Add Budget Entry'}</DialogTitle>
                   <DialogDescription>Set budgeted costs by category</DialogDescription>
                 </DialogHeader>
 
@@ -359,9 +576,9 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                 </div>
 
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsOpen(false)}>Cancel</Button>
+                  <Button variant="outline" onClick={() => { setIsOpen(false); setEditing(null); resetForm(); }}>Cancel</Button>
                   <Button onClick={handleSave} disabled={isSaving} className="bg-blue-600 text-white hover:bg-blue-700">
-                    {isSaving ? 'Saving...' : 'Add Budget'}
+                    {isSaving ? 'Saving...' : editing ? 'Update' : 'Add Budget'}
                   </Button>
                 </DialogFooter>
               </DialogContent>
@@ -383,19 +600,47 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                   <TableHead>Category</TableHead>
                   <TableHead className="w-[140px]">Amount</TableHead>
                   <TableHead>Description</TableHead>
+                  <TableHead className="w-[100px] text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {budgetEntries.map((entry) => (
-                  <TableRow key={entry.ledger_id}>
-                    <TableCell className="text-sm">{new Date(entry.cost_date).toLocaleDateString()}</TableCell>
+                  <TableRow key={entry.ledger_id} className="hover:bg-slate-50">
+                    <TableCell className="text-sm">{new Date(entry.cost_date).toLocaleDateString('en-IN')}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{entry.cost_category}</Badge>
                     </TableCell>
-                    <TableCell className="font-semibold">₹{entry.amount.toLocaleString('en-IN')}</TableCell>
+                    <TableCell className="font-semibold">₹{Number(entry.amount).toLocaleString('en-IN')}</TableCell>
                     <TableCell className="text-sm text-slate-600">{entry.description || '—'}</TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="outline" size="sm"
+                          onClick={() => openEdit(entry)}
+                          title="Edit"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="outline" size="sm"
+                          onClick={() => handleDelete(entry)}
+                          title="Delete"
+                          className="text-red-500 hover:bg-red-50 hover:text-red-600"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
+                {/* Totals row */}
+                <TableRow className="bg-slate-50 font-semibold border-t-2">
+                  <TableCell colSpan={2} className="text-right text-sm">Total Budget</TableCell>
+                  <TableCell className="font-bold text-blue-700">
+                    ₹{budgetEntries.reduce((s, e) => s + Number(e.amount), 0).toLocaleString('en-IN')}
+                  </TableCell>
+                  <TableCell colSpan={2} />
+                </TableRow>
               </TableBody>
             </Table>
           )}
@@ -557,9 +802,10 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
             <div className="text-sm text-blue-800">
               <div className="font-semibold mb-2">How Dynamic Costing Works:</div>
               <ul className="space-y-1 list-disc list-inside">
-                <li><strong>Material Costs</strong>: Auto-calculated from outward material movements (issues & utilization)</li>
-                <li><strong>Labor Costs</strong>: In-House from payroll entries + Outsourced from payment records</li>
-                <li><strong>Real-Time Variance</strong>: Automatically updates as movements and payments are recorded</li>
+                <li><strong>Material Costs</strong>: Auto-calculated from outward material movements (issues &amp; utilization)</li>
+                <li><strong>In-House Labour</strong>: (Monthly Salary ÷ 24) × Bandwidth % × Working Days — from the Manpower tab</li>
+                <li><strong>Outsourced Labour</strong>: Daily Wage × Working Days + Incentive — from the Manpower tab</li>
+                <li><strong>Real-Time Variance</strong>: Automatically updates as manpower entries and movements are recorded</li>
                 <li><strong>Profit/Loss</strong>: Calculated from income transactions minus all actual costs</li>
               </ul>
             </div>

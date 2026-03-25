@@ -46,7 +46,7 @@ type Activity = {
     status: string;
 };
 
-export default function ClientProgressTab({ projectId }: { projectId: string }) {
+export default function ClientProgressTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
     const [activities, setActivities] = useState<Activity[]>([]);
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<'details' | 'chart'>('details');
@@ -303,11 +303,13 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                             });
                         }
                     }}>
-                        <DialogTrigger asChild>
-                            <Button className="bg-blue-600 h-9 text-xs">
-                                <PlusIcon className="w-3 h-3 mr-1.5" /> Activity
-                            </Button>
-                        </DialogTrigger>
+                        {!readOnly && (
+                            <DialogTrigger asChild>
+                                <Button className="bg-blue-600 h-9 text-xs">
+                                    <PlusIcon className="w-3 h-3 mr-1.5" /> Activity
+                                </Button>
+                            </DialogTrigger>
+                        )}
                         <DialogContent className="max-w-2xl bg-white">
                             <DialogHeader>
                                 <DialogTitle>{editingId ? "Edit Activity" : "Add Activity"}</DialogTitle>
@@ -616,6 +618,7 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                                 <ExternalLink className="h-4 w-4" />
                                             </Button>
                                         </TableCell>
+                                        {!readOnly && (
                                         <TableCell className="text-center">
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
@@ -633,6 +636,7 @@ export default function ClientProgressTab({ projectId }: { projectId: string }) 
                                                 </DropdownMenuContent>
                                             </DropdownMenu>
                                         </TableCell>
+                                        )}
                                     </TableRow>
                                 ))
                             )}

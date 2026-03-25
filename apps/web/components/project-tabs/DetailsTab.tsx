@@ -22,7 +22,7 @@ type ProjectRow = {
   created_at?: string | null;
 };
 
-export default function DetailsTab({ projectId }: { projectId: string }) {
+export default function DetailsTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -105,10 +105,12 @@ export default function DetailsTab({ projectId }: { projectId: string }) {
           <CardTitle className="text-lg flex items-center gap-2">
             <Info className="h-5 w-5 text-slate-500" /> Project Details
           </CardTitle>
-          <Button onClick={handleSave} disabled={isSaving || loading || !project} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
-            <Save className="h-4 w-4 mr-2" />
-            {isSaving ? 'Saving...' : 'Save'}
-          </Button>
+          {!readOnly && (
+            <Button onClick={handleSave} disabled={isSaving || loading || !project} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
+              <Save className="h-4 w-4 mr-2" />
+              {isSaving ? 'Saving...' : 'Save'}
+            </Button>
+          )}
         </CardHeader>
 
         <CardContent>
@@ -120,33 +122,37 @@ export default function DetailsTab({ projectId }: { projectId: string }) {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <Label>Project name</Label>
-                <Input value={form.project_name} onChange={(e) => setForm({ ...form, project_name: e.target.value })} className="bg-white" />
+                <Input value={form.project_name} onChange={(e) => setForm({ ...form, project_name: e.target.value })} className="bg-white" disabled={readOnly} />
               </div>
 
               <div className="space-y-2">
                 <Label>Status</Label>
-                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
-                  <SelectTrigger className="bg-white">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-white border border-slate-200 shadow-lg">
-                    {PROJECT_STATUS_OPTIONS.map((s) => (
-                      <SelectItem key={s} value={s} className="bg-white hover:bg-slate-50">
-                        {s}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {readOnly ? (
+                  <Input value={form.status} disabled className="bg-white" />
+                ) : (
+                  <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+                    <SelectTrigger className="bg-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white border border-slate-200 shadow-lg">
+                      {PROJECT_STATUS_OPTIONS.map((s) => (
+                        <SelectItem key={s} value={s} className="bg-white hover:bg-slate-50">
+                          {s}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
 
               <div className="space-y-2">
                 <Label>Start date</Label>
-                <Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} className="bg-white" />
+                <Input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} className="bg-white" disabled={readOnly} />
               </div>
 
               <div className="space-y-2">
                 <Label>Location</Label>
-                <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} className="bg-white" placeholder="Optional" />
+                <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} className="bg-white" placeholder="Optional" disabled={readOnly} />
               </div>
 
               <div className="space-y-2">

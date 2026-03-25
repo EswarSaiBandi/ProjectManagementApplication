@@ -39,7 +39,7 @@ function safeFileName(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-export default function FilesTab({ projectId }: { projectId: string }) {
+export default function FilesTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
 
   const [files, setFiles] = useState<ProjectFile[]>([]);
@@ -190,11 +190,13 @@ export default function FilesTab({ projectId }: { projectId: string }) {
               if (!open) setUploadFile(null);
             }}
           >
-            <DialogTrigger asChild>
-              <Button onClick={() => setIsOpen(true)} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
-                <Plus className="h-4 w-4 mr-2" /> Upload
-              </Button>
-            </DialogTrigger>
+            {!readOnly && (
+              <DialogTrigger asChild>
+                <Button onClick={() => setIsOpen(true)} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
+                  <Plus className="h-4 w-4 mr-2" /> Upload
+                </Button>
+              </DialogTrigger>
+            )}
             <DialogContent className="bg-white">
               <DialogHeader>
                 <DialogTitle>Upload File</DialogTitle>
@@ -264,9 +266,11 @@ export default function FilesTab({ projectId }: { projectId: string }) {
                         <Button variant="outline" size="sm" onClick={() => handleDownload(f)}>
                           <Download className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => handleDelete(f)}>
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        {!readOnly && (
+                          <Button variant="outline" size="sm" onClick={() => handleDelete(f)}>
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

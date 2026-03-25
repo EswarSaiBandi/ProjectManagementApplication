@@ -50,13 +50,13 @@ function priorityBadge(priority: string) {
   return "bg-yellow-100 text-yellow-800";
 }
 
-export default function TasksTab({ projectId }: { projectId: string }) {
+export default function TasksTab({ projectId, readOnly = false }: { projectId: string; readOnly?: boolean }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
 
   const [tasks, setTasks] = useState<ProjectTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [teamNames, setTeamNames] = useState<string[]>([]);
+  const [assignableMembers, setAssignableMembers] = useState<{ user_id: string; full_name: string; role: string }[]>([]);
 
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -109,20 +109,47 @@ export default function TasksTab({ projectId }: { projectId: string }) {
   }, [numericProjectId]);
 
   useEffect(() => {
-    const fetchTeamNames = async () => {
-      const { data, error } = await supabase.from("profiles").select("full_name").order("full_name");
-      if (error) {
-        console.error("Profiles fetch error:", error);
-        setTeamNames([]);
-        return;
+    if (!numericProjectId) return;
+    const fetchAssignable = async () => {
+      // 1. Always-eligible: Admin and ProjectManager (access to all projects)
+      const { data: adminProfiles } = await supabase
+        .from("profiles")
+        .select("user_id, full_name, role")
+        .in("role", ["Admin", "ProjectManager"])
+        .eq("is_active", true)
+        .order("full_name");
+
+      // 2. SiteSupervisors assigned to this project via project_members
+      const { data: memberRows } = await supabase
+        .from("project_members")
+        .select("user_id")
+        .eq("project_id", numericProjectId);
+
+      const supervisorIds = (memberRows || []).map((m: any) => m.user_id);
+      let supervisorProfiles: any[] = [];
+      if (supervisorIds.length > 0) {
+        const { data: supData } = await supabase
+          .from("profiles")
+          .select("user_id, full_name, role")
+          .in("user_id", supervisorIds)
+          .eq("role", "SiteSupervisor")
+          .eq("is_active", true)
+          .order("full_name");
+        supervisorProfiles = supData || [];
       }
-      const names = (data || [])
-        .map((r: any) => String(r.full_name || "").trim())
-        .filter(Boolean);
-      setTeamNames(Array.from(new Set(names)));
+
+      // Merge, deduplicate by user_id, exclude Client
+      const merged = [...(adminProfiles || []), ...supervisorProfiles];
+      const seen = new Set<string>();
+      const unique = merged.filter(p => {
+        if (seen.has(p.user_id)) return false;
+        seen.add(p.user_id);
+        return p.full_name;
+      });
+      setAssignableMembers(unique);
     };
-    fetchTeamNames();
-  }, []);
+    fetchAssignable();
+  }, [numericProjectId]);
 
   const openNew = () => {
     resetForm();
@@ -151,14 +178,11 @@ export default function TasksTab({ projectId }: { projectId: string }) {
 
   const handleSave = async () => {
     if (isSaving) return;
-    if (!form.title.trim()) {
-      toast.error("Title is required");
-      return;
-    }
-    if (!Number.isFinite(numericProjectId)) {
-      toast.error("Invalid project");
-      return;
-    }
+    if (!Number.isFinite(numericProjectId)) { toast.error("Invalid project"); return; }
+    if (!form.title.trim())         { toast.error("Title is required"); return; }
+    if (!form.description.trim())   { toast.error("Description is required"); return; }
+    if (!form.due_date)             { toast.error("Due date is required"); return; }
+    if (!form.assignee_name.trim()) { toast.error("Assignee is required"); return; }
 
     setIsSaving(true);
     const { data: userData } = await supabase.auth.getUser();
@@ -299,21 +323,18 @@ export default function TasksTab({ projectId }: { projectId: string }) {
                 if (!open) resetForm();
               }}
             >
-              <DialogTrigger asChild>
-                <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
-                  <Plus className="h-4 w-4 mr-2" /> New Task
-                </Button>
-              </DialogTrigger>
+              {!readOnly && (
+                <DialogTrigger asChild>
+                  <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
+                    <Plus className="h-4 w-4 mr-2" /> New Task
+                  </Button>
+                </DialogTrigger>
+              )}
               <DialogContent className="bg-white">
                 <DialogHeader>
                   <DialogTitle>{editing ? "Edit Task" : "New Task"}</DialogTitle>
                   <DialogDescription>Add tasks scoped to this project.</DialogDescription>
                 </DialogHeader>
-                <datalist id="team-member-names">
-                  {teamNames.map((n) => (
-                    <option key={n} value={n} />
-                  ))}
-                </datalist>
 
                 <div className="space-y-4 py-2">
                   <div className="space-y-2">
@@ -327,7 +348,7 @@ export default function TasksTab({ projectId }: { projectId: string }) {
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-slate-700">Description</label>
+                    <label className="text-sm font-medium text-slate-700">Description *</label>
                     <Textarea
                       value={form.description}
                       onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
@@ -338,7 +359,7 @@ export default function TasksTab({ projectId }: { projectId: string }) {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-slate-700">Status</label>
+                      <label className="text-sm font-medium text-slate-700">Status *</label>
                       <Select value={form.status} onValueChange={(v) => setForm((p) => ({ ...p, status: v }))}>
                         <SelectTrigger className="bg-white">
                           <SelectValue />
@@ -354,7 +375,7 @@ export default function TasksTab({ projectId }: { projectId: string }) {
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-slate-700">Priority</label>
+                      <label className="text-sm font-medium text-slate-700">Priority *</label>
                       <Select value={form.priority} onValueChange={(v) => setForm((p) => ({ ...p, priority: v }))}>
                         <SelectTrigger className="bg-white">
                           <SelectValue />
@@ -372,7 +393,7 @@ export default function TasksTab({ projectId }: { projectId: string }) {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-slate-700">Due Date</label>
+                      <label className="text-sm font-medium text-slate-700">Due Date *</label>
                       <Input
                         type="date"
                         value={form.due_date}
@@ -381,14 +402,32 @@ export default function TasksTab({ projectId }: { projectId: string }) {
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm font-medium text-slate-700">Assignee</label>
-                      <Input
-                        list="team-member-names"
+                      <label className="text-sm font-medium text-slate-700">Assignee *</label>
+                      <Select
                         value={form.assignee_name}
-                        onChange={(e) => setForm((p) => ({ ...p, assignee_name: e.target.value }))}
-                        placeholder="Name"
-                        className="bg-white"
-                      />
+                        onValueChange={(v) => setForm((p) => ({ ...p, assignee_name: v === '__none__' ? '' : v }))}
+                      >
+                        <SelectTrigger className="bg-white">
+                          <SelectValue placeholder="Select assignee..." />
+                        </SelectTrigger>
+                        <SelectContent className="bg-white border border-slate-200 shadow-lg z-[9999]">
+                          <SelectItem value="__none__" className="text-slate-400 italic">Unassigned</SelectItem>
+                          {assignableMembers.map((m) => (
+                            <SelectItem key={m.user_id} value={m.full_name} className="text-slate-900 focus:bg-slate-100 cursor-pointer">
+                              <span>{m.full_name}</span>
+                              <span className="ml-2 text-xs text-slate-400">
+                                {m.role === 'SiteSupervisor' ? '· Supervisor' : m.role === 'Admin' ? '· Admin' : '· PM'}
+                              </span>
+                            </SelectItem>
+                          ))}
+                          {assignableMembers.length === 0 && (
+                            <div className="px-3 py-2 text-xs text-slate-400 italic">No eligible members found</div>
+                          )}
+                        </SelectContent>
+                      </Select>
+                      {assignableMembers.length === 0 && (
+                        <p className="text-xs text-amber-600">No supervisors are assigned to this project yet. Add members in the Members tab.</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -450,21 +489,23 @@ export default function TasksTab({ projectId }: { projectId: string }) {
                       <TableCell className="text-sm text-slate-700">
                         {t.assignee_name || <span className="text-slate-400">—</span>}
                       </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          {!isDone ? (
-                            <Button variant="outline" size="sm" onClick={() => quickMarkDone(t)} title="Mark done">
-                              <CheckCircle2 className="h-4 w-4" />
+                      {!readOnly && (
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            {!isDone ? (
+                              <Button variant="outline" size="sm" onClick={() => quickMarkDone(t)} title="Mark done">
+                                <CheckCircle2 className="h-4 w-4" />
+                              </Button>
+                            ) : null}
+                            <Button variant="outline" size="sm" onClick={() => openEdit(t)}>
+                              <Pencil className="h-4 w-4" />
                             </Button>
-                          ) : null}
-                          <Button variant="outline" size="sm" onClick={() => openEdit(t)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button variant="outline" size="sm" onClick={() => handleDelete(t)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
+                            <Button variant="outline" size="sm" onClick={() => handleDelete(t)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}

@@ -107,3 +107,55 @@ export async function POST(req: Request) {
     }
 }
 
+export async function PATCH(req: Request) {
+    try {
+        let supabaseAdmin;
+        try {
+            supabaseAdmin = getSupabaseAdmin();
+        } catch (e: any) {
+            return jsonError(e?.message || 'Server misconfigured', 500);
+        }
+
+        const authHeader = req.headers.get('authorization') || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : '';
+        if (!token) return jsonError('Unauthorized', 401);
+
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const supabaseAuth = createClient(supabaseUrl, anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+        });
+        const { data: userData, error: userError } = await supabaseAuth.auth.getUser(token);
+        if (userError || !userData?.user) return jsonError('Unauthorized', 401);
+
+        // Only Admin or ProjectManager can reset passwords
+        const { data: requesterProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('role')
+            .eq('user_id', userData.user.id)
+            .limit(1);
+        const requesterRole = String(requesterProfile?.[0]?.role || '').toLowerCase();
+        if (!['admin', 'projectmanager'].includes(requesterRole)) {
+            return jsonError('Forbidden', 403);
+        }
+
+        const body = await req.json().catch(() => null);
+        const target_user_id = String(body?.user_id || '').trim();
+        const new_password = String(body?.new_password || '');
+
+        if (!target_user_id) return jsonError('user_id is required');
+        if (!new_password || new_password.length < 6) return jsonError('Password must be at least 6 characters');
+
+        // Update password — this invalidates all existing refresh tokens (logs out all devices)
+        const { error: updateError } = await supabaseAdmin.auth.admin.updateUserById(
+            target_user_id,
+            { password: new_password }
+        );
+        if (updateError) return jsonError(updateError.message || 'Failed to reset password', 400);
+
+        return NextResponse.json({ success: true });
+    } catch (e: any) {
+        return jsonError(e?.message || 'Unexpected error', 500);
+    }
+}
+

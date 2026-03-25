@@ -20,6 +20,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { MoreVertical, Pencil, Trash } from "lucide-react";
+import { useRole } from "@/hooks/useRole";
 
 type Project = {
     project_id: number;
@@ -30,6 +31,8 @@ type Project = {
 };
 
 export default function ProjectsPage() {
+    const { isClient, isAdmin, role } = useRole();
+    const canWrite = isAdmin || role === 'ProjectManager';
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
     const [projectTypeOptions, setProjectTypeOptions] = useState<string[]>([]);
@@ -203,11 +206,13 @@ export default function ProjectsPage() {
                 <h1 className="text-3xl font-bold tracking-tight">My Projects</h1>
 
                 <Dialog open={isNewProjectOpen} onOpenChange={setIsNewProjectOpen}>
-                    <DialogTrigger asChild>
-                        <Button onClick={openNewProjectModal} className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
-                            <Plus className="h-4 w-4" /> New Project
-                        </Button>
-                    </DialogTrigger>
+                    {canWrite && (
+                        <DialogTrigger asChild>
+                            <Button onClick={openNewProjectModal} className="bg-blue-600 hover:bg-blue-700 text-white gap-2">
+                                <Plus className="h-4 w-4" /> New Project
+                            </Button>
+                        </DialogTrigger>
+                    )}
                     <DialogContent className="bg-white text-slate-900 border shadow-lg sm:max-w-[500px]">
                         <DialogHeader>
                             <DialogTitle>{editingId ? 'Edit Project' : 'Create New Project'}</DialogTitle>
@@ -346,9 +351,11 @@ export default function ProjectsPage() {
                 ) : projects.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-20 border-2 border-dashed rounded-lg bg-gray-50">
                         <p className="text-lg text-gray-500 mb-4">No active projects found.</p>
-                        <Button variant="outline" className="gap-2" onClick={openNewProjectModal}>
-                            <Plus className="h-4 w-4" /> Click 'New Project' to start
-                        </Button>
+                        {canWrite && (
+                            <Button variant="outline" className="gap-2" onClick={openNewProjectModal}>
+                                <Plus className="h-4 w-4" /> Click 'New Project' to start
+                            </Button>
+                        )}
                     </div>
                 ) : (
                     <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
@@ -363,24 +370,26 @@ export default function ProjectsPage() {
                                             <Badge variant={project.status === 'Execution' ? 'default' : 'secondary'} className={project.status === 'Execution' ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}>
                                                 {project.status}
                                             </Badge>
-                                            <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" className="h-8 w-8 p-0 text-gray-500 hover:text-gray-900">
-                                                        <span className="sr-only">Open menu</span>
-                                                        <MoreVertical className="h-4 w-4" />
-                                                    </Button>
-                                                </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end" className="bg-white border-slate-200 shadow-md">
-                                                    <DropdownMenuItem onClick={() => handleEditProject(project)} className="cursor-pointer text-slate-700 hover:bg-slate-100 focus:bg-slate-100">
-                                                        <Pencil className="mr-2 h-4 w-4" />
-                                                        Edit
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => handleDeleteClick(project)} className="cursor-pointer text-red-600 hover:bg-red-50 focus:bg-red-50">
-                                                        <Trash className="mr-2 h-4 w-4" />
-                                                        Delete
-                                                    </DropdownMenuItem>
-                                                </DropdownMenuContent>
-                                            </DropdownMenu>
+                                            {canWrite && (
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button variant="ghost" className="h-8 w-8 p-0 text-gray-500 hover:text-gray-900">
+                                                            <span className="sr-only">Open menu</span>
+                                                            <MoreVertical className="h-4 w-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent align="end" className="bg-white border-slate-200 shadow-md">
+                                                        <DropdownMenuItem onClick={() => handleEditProject(project)} className="cursor-pointer text-slate-700 hover:bg-slate-100 focus:bg-slate-100">
+                                                            <Pencil className="mr-2 h-4 w-4" />
+                                                            Edit
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => handleDeleteClick(project)} className="cursor-pointer text-red-600 hover:bg-red-50 focus:bg-red-50">
+                                                            <Trash className="mr-2 h-4 w-4" />
+                                                            Delete
+                                                        </DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            )}
                                         </div>
                                     </div>
                                 </CardHeader>

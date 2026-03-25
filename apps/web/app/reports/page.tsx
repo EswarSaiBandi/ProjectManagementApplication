@@ -5,766 +5,340 @@ import { supabase } from '@/lib/supabase';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { PieChart, BarChart3, TrendingUp, Download, Calendar, FileText, Users, DollarSign, Package, Activity, Printer } from 'lucide-react';
+import {
+    BarChart3, TrendingUp, Download, FileText, Users,
+    DollarSign, Package, Activity, Printer, ListTodo,
+    CheckCircle2, Clock, AlertTriangle, FolderKanban,
+    ShoppingCart, Layers,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
-type ReportData = {
-    totalRevenue: number;
-    totalExpenses: number;
-    netProfit: number;
+/* ─── Types ────────────────────────────────────────────────── */
+type Project = { project_id: number; project_name: string; status: string; location: string | null; start_date: string | null };
+
+type ProjectSummary = {
+    project: Project;
+    totalCost: number;
+    pendingTasks: number;
+    doneTasks: number;
+    totalTasks: number;
+    totalActivities: number;
+    completedActivities: number;
+    avgProgress: number;
+    pendingMaterials: number;
+    approvedMaterials: number;
+};
+
+type QuickStats = {
+    totalProjectCost: number;
+    pendingTasks: number;
+    doneTasks: number;
+    pendingMaterials: number;
+    avgProgress: number;
+    totalProjects: number;
     activeProjects: number;
-    completedProjects: number;
-    teamMembers: number;
-    completionRate: number;
-    transactions: any[];
-    projects: any[];
-    activities: any[];
-    purchaseRequests: any[];
-    teamPerformance: any[];
 };
 
-type Project = {
-    project_id: number;
-    project_name: string;
+const fmt = (n: number) => new Intl.NumberFormat('en-IN').format(Math.round(n));
+
+const STATUS_COLOR: Record<string, string> = {
+    Planning:  'bg-blue-100 text-blue-700',
+    Execution: 'bg-amber-100 text-amber-700',
+    Handover:  'bg-purple-100 text-purple-700',
+    Completed: 'bg-green-100 text-green-700',
 };
 
+const STATUS_BAR: Record<string, string> = {
+    Planning:  'bg-blue-400',
+    Execution: 'bg-amber-400',
+    Handover:  'bg-purple-500',
+    Completed: 'bg-green-500',
+};
+
+const MAT_BADGE: Record<string, string> = {
+    Pending:  'bg-amber-100 text-amber-700',
+    Approved: 'bg-green-100 text-green-700',
+    Rejected: 'bg-red-100 text-red-700',
+    Fulfilled:'bg-teal-100 text-teal-700',
+};
+
+/* ─── Page ─────────────────────────────────────────────────── */
 export default function ReportsPage() {
-    const [reportType, setReportType] = useState('overview');
-    const [dateRange, setDateRange] = useState('month');
-    const [selectedProject, setSelectedProject] = useState<string>('all');
-    const [projects, setProjects] = useState<Project[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [reportData, setReportData] = useState<ReportData>({
-        totalRevenue: 0,
-        totalExpenses: 0,
-        netProfit: 0,
-        activeProjects: 0,
-        completedProjects: 0,
-        teamMembers: 0,
-        completionRate: 0,
-        transactions: [],
-        projects: [],
-        activities: [],
-        purchaseRequests: [],
-        teamPerformance: [],
-    });
+    const [userRole, setUserRole] = useState('');
+    const [allowedIds, setAllowedIds] = useState<number[] | null>(null); // null = all, [] = none
+    const [initializing, setInitializing] = useState(true);
 
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [selectedProject, setSelectedProject] = useState<string>('all');
+    const [reportType, setReportType] = useState<'summary' | 'projects' | 'tasks' | 'materials'>('summary');
+    const [loading, setLoading] = useState(false);
+
+    const [quickStats, setQuickStats] = useState<QuickStats>({ totalProjectCost: 0, pendingTasks: 0, doneTasks: 0, pendingMaterials: 0, avgProgress: 0, totalProjects: 0, activeProjects: 0 });
+    const [summaries, setSummaries] = useState<ProjectSummary[]>([]);
+
+    /* ── Init: get role + allowed project IDs ── */
     useEffect(() => {
-        fetchProjects();
+        (async () => {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+            const { data: profile } = await supabase.from('profiles').select('role').eq('user_id', user.id).single();
+            const role = profile?.role || '';
+            setUserRole(role);
+
+            if (role === 'SiteSupervisor') {
+                const { data: mem } = await supabase.from('project_members').select('project_id').eq('user_id', user.id);
+                setAllowedIds((mem || []).map((m: any) => Number(m.project_id)));
+            } else {
+                setAllowedIds(null); // Admin/PM: all projects
+            }
+            setInitializing(false);
+        })();
     }, []);
 
-    const fetchProjects = async () => {
-        const { data } = await supabase
-            .from('projects')
-            .select('project_id, project_name')
-            .order('project_name');
-        if (data) setProjects(data);
-    };
-
-    const fetchReportData = useCallback(async () => {
-        try {
-            setLoading(true);
-            
-            // Calculate date range
-            const endDate = new Date();
-            const endDateStr = endDate.toISOString().split('T')[0];
-            const startDate = new Date();
-            switch (dateRange) {
-                case 'week':
-                    startDate.setDate(endDate.getDate() - 7);
-                    break;
-                case 'month':
-                    startDate.setMonth(endDate.getMonth() - 1);
-                    break;
-                case 'quarter':
-                    startDate.setMonth(endDate.getMonth() - 3);
-                    break;
-                case 'year':
-                    startDate.setFullYear(endDate.getFullYear() - 1);
-                    break;
-            }
-            const startDateStr = startDate.toISOString().split('T')[0];
-
-            // Fetch transactions
-            let transactionsQuery = supabase
-                .from('transactions')
-                .select('*')
-                .gte('transaction_date', startDateStr)
-                .lte('transaction_date', endDateStr)
-                .order('transaction_date', { ascending: false });
-
-            if (selectedProject !== 'all') {
-                transactionsQuery = transactionsQuery.eq('project_id', parseInt(selectedProject));
-            }
-
-            const { data: transactions, error: txError } = await transactionsQuery;
-            if (txError) console.error('Transaction fetch error:', txError);
-
-            const credits = (transactions || []).filter((t: any) => t.type === 'Credit');
-            const debits = (transactions || []).filter((t: any) => t.type === 'Debit');
-            const totalRevenue = credits.reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-            const totalExpenses = debits.reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0);
-            const netProfit = totalRevenue - totalExpenses;
-
-            // Fetch projects
-            let projectsQuery = supabase
-                .from('projects')
-                .select('*')
-                .order('created_at', { ascending: false });
-
-            if (selectedProject !== 'all') {
-                projectsQuery = projectsQuery.eq('project_id', parseInt(selectedProject));
-            }
-
-            const { data: projectsData, error: projectsError } = await projectsQuery;
-            if (projectsError) console.error('Projects fetch error:', projectsError);
-
-            const activeProjects = (projectsData || []).filter(p => ['Planning', 'Execution', 'Handover'].includes(p.status)).length;
-            const completedProjects = (projectsData || []).filter(p => p.status === 'Completed').length;
-
-            // Fetch team members
-            const { count: teamMembersCount, error: profilesError } = await supabase
-                .from('profiles')
-                .select('*', { count: 'exact', head: true });
-            if (profilesError) console.error('Profiles fetch error:', profilesError);
-
-            // Fetch activities
-            let activitiesQuery = supabase
-                .from('site_activities')
-                .select('*, projects:project_id(project_name)')
-                .order('start_date', { ascending: false });
-
-            if (selectedProject !== 'all') {
-                activitiesQuery = activitiesQuery.eq('project_id', parseInt(selectedProject));
-            }
-
-            const { data: activities, error: activitiesError } = await activitiesQuery;
-            if (activitiesError) console.error('Activities fetch error:', activitiesError);
-
-            const totalActivities = activities?.length || 0;
-            const completedActivities = activities?.filter(a => 
-                a.status?.toLowerCase().includes('completed') || a.progress >= 100
-            ).length || 0;
-            const completionRate = totalActivities > 0 
-                ? Math.round((completedActivities / totalActivities) * 100) 
-                : 0;
-
-            // Fetch purchase requests
-            let prQuery = supabase
-                .from('purchase_requests')
-                .select('*, projects:project_id(project_name), profiles:requester_id(full_name)')
-                .order('created_at', { ascending: false });
-
-            if (selectedProject !== 'all') {
-                prQuery = prQuery.eq('project_id', parseInt(selectedProject));
-            }
-
-            const { data: purchaseRequests, error: prError } = await prQuery;
-            if (prError) console.error('Purchase requests fetch error:', prError);
-
-            // Fetch team performance (activities by owner)
-            const teamPerformanceMap = new Map();
-            (activities || []).forEach((activity: any) => {
-                const owner = activity.owner || 'Unassigned';
-                if (!teamPerformanceMap.has(owner)) {
-                    teamPerformanceMap.set(owner, { name: owner, total: 0, completed: 0, inProgress: 0 });
-                }
-                const perf = teamPerformanceMap.get(owner);
-                perf.total++;
-                if (activity.status?.toLowerCase().includes('completed') || activity.progress >= 100) {
-                    perf.completed++;
-                } else if (activity.status?.toLowerCase().includes('progress')) {
-                    perf.inProgress++;
-                }
-            });
-            const teamPerformance = Array.from(teamPerformanceMap.values()).map(perf => ({
-                ...perf,
-                completionRate: perf.total > 0 ? Math.round((perf.completed / perf.total) * 100) : 0,
-            }));
-
-            setReportData({
-                totalRevenue,
-                totalExpenses,
-                netProfit,
-                activeProjects,
-                completedProjects,
-                teamMembers: teamMembersCount || 0,
-                completionRate,
-                transactions: transactions || [],
-                projects: projectsData || [],
-                activities: activities || [],
-                purchaseRequests: purchaseRequests || [],
-                teamPerformance,
-            });
-        } catch (error) {
-            console.error('Error fetching report data:', error);
-            toast.error('Failed to load report data');
-        } finally {
-            setLoading(false);
-        }
-    }, [dateRange, reportType, selectedProject]);
-
+    /* ── Fetch projects list (for filter dropdown) ── */
     useEffect(() => {
-        fetchReportData();
-    }, [fetchReportData]);
+        if (initializing) return;
+        (async () => {
+            let q = supabase.from('projects').select('project_id, project_name, status, location, start_date').order('project_name');
+            if (allowedIds !== null) {
+                if (allowedIds.length === 0) { setProjects([]); return; }
+                q = q.in('project_id', allowedIds);
+            }
+            const { data } = await q;
+            setProjects((data || []) as Project[]);
+        })();
+    }, [initializing, allowedIds]);
 
-    const exportToCSV = (data: any[], filename: string) => {
-        if (data.length === 0) {
-            toast.error('No data to export');
-            return;
+    /* ── Main data fetch ── */
+    const fetchData = useCallback(async () => {
+        if (initializing) return;
+        setLoading(true);
+
+        // Determine project IDs to query
+        let ids: number[] | null = allowedIds; // null = all
+        if (selectedProject !== 'all') {
+            ids = [parseInt(selectedProject)];
+        } else if (allowedIds !== null && allowedIds.length === 0) {
+            setLoading(false); return;
         }
 
-        const headers = Object.keys(data[0]);
-        const csvContent = [
-            headers.join(','),
-            ...data.map(row => headers.map(header => {
-                const value = row[header];
-                if (value === null || value === undefined) return '';
-                if (typeof value === 'object') return JSON.stringify(value);
-                return String(value).replace(/,/g, ';');
-            }).join(','))
-        ].join('\n');
+        // 1. Projects
+        let pq = supabase.from('projects').select('project_id, project_name, status, location, start_date').order('project_name');
+        if (ids !== null) pq = pq.in('project_id', ids);
+        const { data: projs } = await pq;
+        const projList = (projs || []) as Project[];
 
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement('a');
-        const url = URL.createObjectURL(blob);
-        link.setAttribute('href', url);
-        link.setAttribute('download', `${filename}_${new Date().toISOString().split('T')[0]}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        toast.success('Report exported successfully');
-    };
-
-    const handleExportReport = () => {
-        switch (reportType) {
-            case 'financial':
-                exportToCSV(reportData.transactions, 'financial_report');
-                break;
-            case 'projects':
-                exportToCSV(reportData.projects, 'project_report');
-                break;
-            case 'team':
-                exportToCSV(reportData.teamPerformance, 'team_performance_report');
-                break;
-            default:
-                const overviewData = [
-                    { Metric: 'Total Revenue', Value: `₹${reportData.totalRevenue.toLocaleString('en-IN')}` },
-                    { Metric: 'Total Expenses', Value: `₹${reportData.totalExpenses.toLocaleString('en-IN')}` },
-                    { Metric: 'Net Profit', Value: `₹${reportData.netProfit.toLocaleString('en-IN')}` },
-                    { Metric: 'Active Projects', Value: reportData.activeProjects },
-                    { Metric: 'Completed Projects', Value: reportData.completedProjects },
-                    { Metric: 'Team Members', Value: reportData.teamMembers },
-                    { Metric: 'Completion Rate', Value: `${reportData.completionRate}%` },
-                ];
-                exportToCSV(overviewData, 'overview_report');
+        const projIds = projList.map(p => p.project_id);
+        if (projIds.length === 0) {
+            setSummaries([]);
+            setQuickStats({ totalProjectCost: 0, pendingTasks: 0, doneTasks: 0, pendingMaterials: 0, avgProgress: 0, totalProjects: 0, activeProjects: 0 });
+            setLoading(false); return;
         }
+
+        // 2. Tasks
+        const { data: tasks } = await supabase.from('project_tasks').select('task_id, project_id, status').in('project_id', projIds);
+        const taskRows = tasks || [];
+
+        // 3. Activities (for progress)
+        const { data: acts } = await supabase.from('site_activities').select('activity_id, project_id, status, progress').in('project_id', projIds);
+        const actRows = acts || [];
+
+        // 4. Material requests
+        const { data: mats } = await supabase.from('purchase_requests').select('request_id, project_id, status').in('project_id', projIds);
+        const matRows = mats || [];
+
+        // 5. Project costing (total cost per project)
+        const { data: costings } = await supabase.from('project_costing').select('project_id, total_cost').in('project_id', projIds);
+        const costMap: Record<number, number> = {};
+        (costings || []).forEach((c: any) => { costMap[c.project_id] = (costMap[c.project_id] || 0) + (parseFloat(c.total_cost) || 0); });
+
+        // Build per-project summaries
+        const built: ProjectSummary[] = projList.map(project => {
+            const pid = project.project_id;
+            const pTasks = taskRows.filter((t: any) => t.project_id === pid);
+            const pendingTasks = pTasks.filter((t: any) => (t.status || '').toLowerCase() !== 'done').length;
+            const doneTasks = pTasks.filter((t: any) => (t.status || '').toLowerCase() === 'done').length;
+
+            const pActs = actRows.filter((a: any) => a.project_id === pid);
+            const completedActs = pActs.filter((a: any) => (a.status || '').toLowerCase().includes('complet') || (a.progress || 0) >= 100).length;
+            const avgProgress = pActs.length > 0 ? Math.round(pActs.reduce((s: number, a: any) => s + (a.progress || 0), 0) / pActs.length) : 0;
+
+            const pMats = matRows.filter((m: any) => m.project_id === pid);
+            const pendingMats = pMats.filter((m: any) => (m.status || '').toLowerCase() === 'pending').length;
+            const approvedMats = pMats.filter((m: any) => ['approved', 'fulfilled'].includes((m.status || '').toLowerCase())).length;
+
+            return {
+                project,
+                totalCost: costMap[pid] || 0,
+                pendingTasks,
+                doneTasks,
+                totalTasks: pTasks.length,
+                totalActivities: pActs.length,
+                completedActivities: completedActs,
+                avgProgress,
+                pendingMaterials: pendingMats,
+                approvedMaterials: approvedMats,
+            };
+        });
+
+        setSummaries(built);
+
+        // Quick stats (aggregate)
+        setQuickStats({
+            totalProjectCost: built.reduce((s, b) => s + b.totalCost, 0),
+            pendingTasks:     built.reduce((s, b) => s + b.pendingTasks, 0),
+            doneTasks:        built.reduce((s, b) => s + b.doneTasks, 0),
+            pendingMaterials: built.reduce((s, b) => s + b.pendingMaterials, 0),
+            avgProgress:      built.length > 0 ? Math.round(built.reduce((s, b) => s + b.avgProgress, 0) / built.length) : 0,
+            totalProjects:    projList.length,
+            activeProjects:   projList.filter(p => ['Planning','Execution','Handover'].includes(p.status)).length,
+        });
+
+        setLoading(false);
+    }, [initializing, allowedIds, selectedProject]);
+
+    useEffect(() => { fetchData(); }, [fetchData]);
+
+    /* ── Export ── */
+    const exportCSV = (rows: any[], name: string) => {
+        if (!rows.length) { toast.error('No data to export'); return; }
+        const headers = Object.keys(rows[0]);
+        const csv = [headers.join(','), ...rows.map(r => headers.map(h => {
+            const v = r[h]; if (v === null || v === undefined) return '';
+            if (typeof v === 'object') return JSON.stringify(v); return String(v).replace(/,/g, ';');
+        }).join(','))].join('\n');
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+        a.download = `${name}_${new Date().toISOString().split('T')[0]}.csv`;
+        a.click();
+        toast.success('Exported successfully');
     };
 
-    const handlePrint = () => {
-        window.print();
+    const handleExport = () => {
+        const rows = summaries.map(s => ({
+            Project: s.project.project_name,
+            Status: s.project.status,
+            'Total Cost (₹)': s.totalCost,
+            'Pending Tasks': s.pendingTasks,
+            'Done Tasks': s.doneTasks,
+            'Avg Progress (%)': s.avgProgress,
+            'Pending Materials': s.pendingMaterials,
+        }));
+        exportCSV(rows, 'project_report');
     };
 
-    const getStatusColor = (status: string) => {
-        const statusLower = status?.toLowerCase() || '';
-        if (statusLower.includes('completed')) return 'bg-green-100 text-green-800';
-        if (statusLower.includes('progress')) return 'bg-blue-100 text-blue-800';
-        if (statusLower.includes('pending')) return 'bg-yellow-100 text-yellow-800';
-        return 'bg-gray-100 text-gray-800';
-    };
+    if (initializing) {
+        return <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">Loading...</div>;
+    }
 
-    const getStatusBarColor = (status: string) => {
-        const statusLower = status?.toLowerCase() || '';
-        if (statusLower.includes('completed')) return 'bg-green-500';
-        if (statusLower.includes('handover')) return 'bg-indigo-500';
-        if (statusLower.includes('execution') || statusLower.includes('progress')) return 'bg-blue-500';
-        if (statusLower.includes('planning') || statusLower.includes('pending')) return 'bg-yellow-500';
-        return 'bg-slate-400';
-    };
-
-    const renderFinancialReport = () => (
-        <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-3">
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
-                        <TrendingUp className="h-4 w-4 text-green-600" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold text-green-600">
-                            ₹{new Intl.NumberFormat('en-IN').format(reportData.totalRevenue)}
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Total Expenses</CardTitle>
-                        <DollarSign className="h-4 w-4 text-red-600" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold text-red-600">
-                            ₹{new Intl.NumberFormat('en-IN').format(reportData.totalExpenses)}
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Net Profit</CardTitle>
-                        <BarChart3 className="h-4 w-4 text-blue-600" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className={`text-2xl font-bold ${reportData.netProfit >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            ₹{new Intl.NumberFormat('en-IN').format(reportData.netProfit)}
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>Transaction Details</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Date</TableHead>
-                                    <TableHead>Project</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Category</TableHead>
-                                    <TableHead className="text-right">Amount</TableHead>
-                                    <TableHead>Channel</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {reportData.transactions.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={6} className="text-center text-muted-foreground">
-                                            No transactions found
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    reportData.transactions.map((tx: any) => (
-                                        <TableRow key={tx.transaction_id}>
-                                            <TableCell>{new Date(tx.transaction_date).toLocaleDateString()}</TableCell>
-                                            <TableCell>
-                                                <Link href={`/projects/${tx.project_id}`} className="text-blue-600 hover:underline">
-                                                    Project #{tx.project_id}
-                                                </Link>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge className={tx.type === 'Credit' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
-                                                    {tx.type}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>{tx.category || 'N/A'}</TableCell>
-                                            <TableCell className="text-right font-semibold">
-                                                {tx.type === 'Credit' ? '+' : '-'}₹{parseFloat(tx.amount || 0).toLocaleString('en-IN')}
-                                            </TableCell>
-                                            <TableCell>{tx.payment_channel || 'N/A'}</TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-    );
-
-    const renderProjectsReport = () => (
-        <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-4">
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Total Projects</CardTitle>
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.projects.length}</div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Active</CardTitle>
-                        <Badge className="bg-blue-500">Active</Badge>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.activeProjects}</div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Completed</CardTitle>
-                        <Badge className="bg-green-500">Completed</Badge>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.completedProjects}</div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Completion Rate</CardTitle>
-                        <PieChart className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.completionRate}%</div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>Project Details</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Project Name</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Start Date</TableHead>
-                                    <TableHead>Location</TableHead>
-                                    <TableHead>Activities</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {reportData.projects.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={5} className="text-center text-muted-foreground">
-                                            No projects found
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    reportData.projects.map((project: any) => {
-                                        const projectActivities = reportData.activities.filter((a: any) => a.project_id === project.project_id);
-                                        return (
-                                            <TableRow key={project.project_id}>
-                                                <TableCell>
-                                                    <Link href={`/projects/${project.project_id}`} className="font-semibold text-blue-600 hover:underline">
-                                                        {project.project_name}
-                                                    </Link>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge className={getStatusColor(project.status)}>
-                                                        {project.status}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell>
-                                                    {project.start_date ? new Date(project.start_date).toLocaleDateString() : 'N/A'}
-                                                </TableCell>
-                                                <TableCell>{project.location || 'N/A'}</TableCell>
-                                                <TableCell>{projectActivities.length}</TableCell>
-                                            </TableRow>
-                                        );
-                                    })
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-    );
-
-    const renderTeamReport = () => (
-        <div className="space-y-6">
-            <Card>
-                <CardHeader>
-                    <CardTitle>Team Performance</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Team Member</TableHead>
-                                    <TableHead>Total Activities</TableHead>
-                                    <TableHead>Completed</TableHead>
-                                    <TableHead>In Progress</TableHead>
-                                    <TableHead>Completion Rate</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {reportData.teamPerformance.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={5} className="text-center text-muted-foreground">
-                                            No team performance data found
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    reportData.teamPerformance.map((perf: any, idx: number) => (
-                                        <TableRow key={idx}>
-                                            <TableCell className="font-semibold">{perf.name}</TableCell>
-                                            <TableCell>{perf.total}</TableCell>
-                                            <TableCell>
-                                                <Badge className="bg-green-100 text-green-800">{perf.completed}</Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge className="bg-blue-100 text-blue-800">{perf.inProgress}</Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-2">
-                                                    <div className="flex-1 bg-gray-200 rounded-full h-2">
-                                                        <div 
-                                                            className="bg-blue-600 h-2 rounded-full" 
-                                                            style={{ width: `${perf.completionRate}%` }}
-                                                        />
-                                                    </div>
-                                                    <span className="text-sm font-semibold">{perf.completionRate}%</span>
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle>Activity Progress</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    <div className="overflow-x-auto">
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Activity</TableHead>
-                                    <TableHead>Project</TableHead>
-                                    <TableHead>Owner</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Progress</TableHead>
-                                    <TableHead>Dates</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {reportData.activities.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={6} className="text-center text-muted-foreground">
-                                            No activities found
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    reportData.activities.slice(0, 20).map((activity: any) => (
-                                        <TableRow key={activity.activity_id}>
-                                            <TableCell className="font-semibold">{activity.activity_name}</TableCell>
-                                            <TableCell>
-                                                {activity.projects?.project_name || `Project #${activity.project_id}`}
-                                            </TableCell>
-                                            <TableCell>{activity.owner || 'Unassigned'}</TableCell>
-                                            <TableCell>
-                                                <Badge className={getStatusColor(activity.status)}>
-                                                    {activity.status}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-2">
-                                                    <div className="flex-1 bg-gray-200 rounded-full h-2">
-                                                        <div 
-                                                            className="bg-blue-600 h-2 rounded-full" 
-                                                            style={{ width: `${activity.progress || 0}%` }}
-                                                        />
-                                                    </div>
-                                                    <span className="text-xs">{activity.progress || 0}%</span>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell className="text-xs">
-                                                {new Date(activity.start_date).toLocaleDateString()} - {new Date(activity.end_date).toLocaleDateString()}
-                                            </TableCell>
-                                        </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
-    );
-
-    const renderOverview = () => (
-        <div className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-4">
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
-                        <TrendingUp className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">
-                            ₹{new Intl.NumberFormat('en-IN').format(reportData.totalRevenue)}
-                        </div>
-                        <p className="text-xs text-muted-foreground">Total credits in selected period</p>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Active Projects</CardTitle>
-                        <FileText className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.activeProjects}</div>
-                        <p className="text-xs text-muted-foreground">Currently in progress</p>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Team Members</CardTitle>
-                        <Users className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.teamMembers}</div>
-                        <p className="text-xs text-muted-foreground">Total registered users</p>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Completion Rate</CardTitle>
-                        <PieChart className="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div className="text-2xl font-bold">{reportData.completionRate}%</div>
-                        <p className="text-xs text-muted-foreground">Activities completed</p>
-                    </CardContent>
-                </Card>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Recent Transactions</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-2">
-                            {reportData.transactions.slice(0, 5).map((tx: any) => (
-                                <div key={tx.transaction_id} className="flex items-center justify-between p-2 border rounded">
-                                    <div>
-                                        <p className="font-semibold text-sm">{tx.category || 'Transaction'}</p>
-                                        <p className="text-xs text-muted-foreground">
-                                            {new Date(tx.transaction_date).toLocaleDateString()}
-                                        </p>
-                                    </div>
-                                    <div className={`font-semibold ${tx.type === 'Credit' ? 'text-green-600' : 'text-red-600'}`}>
-                                        {tx.type === 'Credit' ? '+' : '-'}₹{parseFloat(tx.amount || 0).toLocaleString('en-IN')}
-                                    </div>
-                                </div>
-                            ))}
-                            {reportData.transactions.length === 0 && (
-                                <p className="text-center text-muted-foreground py-4">No transactions found</p>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Project Status Distribution</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-4">
-                            {['Planning', 'Execution', 'Handover', 'Completed'].map(status => {
-                                const count = reportData.projects.filter((p: any) => p.status === status).length;
-                                const percentage = reportData.projects.length > 0 
-                                    ? Math.round((count / reportData.projects.length) * 100) 
-                                    : 0;
-                                return (
-                                    <div key={status} className="space-y-1">
-                                        <div className="flex justify-between text-sm">
-                                            <span>{status}</span>
-                                            <span className="font-semibold">{count} ({percentage}%)</span>
-                                        </div>
-                                        <div className="flex-1 bg-slate-200 dark:bg-slate-800 rounded-full h-2">
-                                            <div 
-                                                className={`h-2 rounded-full ${getStatusBarColor(status)}`}
-                                                style={{
-                                                    width: `${percentage}%`,
-                                                    minWidth: count > 0 ? '6px' : undefined,
-                                                }}
-                                            />
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-        </div>
-    );
+    const taskRows = summaries.flatMap(s => Array.from({ length: s.totalTasks }).map((_, i) => ({ project: s.project.project_name, ...s })));
+    const statusGroups = projects.reduce<Record<string, number>>((acc, p) => {
+        acc[p.status] = (acc[p.status] || 0) + 1; return acc;
+    }, {});
 
     return (
-        <div className="space-y-6 print:space-y-4">
+        <div className="space-y-6">
+            {/* Header */}
             <div className="flex items-center justify-between print:hidden">
                 <div>
                     <h2 className="text-3xl font-bold tracking-tight">Reports</h2>
-                    <p className="text-muted-foreground">View analytics and generate reports</p>
+                    <p className="text-muted-foreground mt-1">
+                        {userRole === 'SiteSupervisor'
+                            ? `Showing your ${projects.length} assigned project${projects.length !== 1 ? 's' : ''}`
+                            : 'Analytics across all projects'}
+                    </p>
                 </div>
                 <div className="flex gap-2">
-                    <Button variant="outline" onClick={handlePrint}>
-                        <Printer className="mr-2 h-4 w-4" />
-                        Print
+                    <Button variant="outline" onClick={() => window.print()}>
+                        <Printer className="mr-2 h-4 w-4" /> Print
                     </Button>
-                    <Button onClick={handleExportReport}>
-                        <Download className="mr-2 h-4 w-4" />
-                        Export Report
+                    <Button onClick={handleExport} className="bg-blue-600 hover:bg-blue-700 text-white">
+                        <Download className="mr-2 h-4 w-4" /> Export CSV
                     </Button>
                 </div>
             </div>
 
+            {/* Quick Summary Cards */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                <Card className="border-l-4 border-l-blue-500">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Total Project Cost</CardTitle>
+                        <DollarSign className="h-4 w-4 text-blue-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold text-blue-700">₹{fmt(quickStats.totalProjectCost)}</div>
+                        <p className="text-xs text-muted-foreground mt-1">{quickStats.totalProjects} projects · {quickStats.activeProjects} active</p>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-amber-500">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Pending Tasks</CardTitle>
+                        <ListTodo className="h-4 w-4 text-amber-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold text-amber-600">{quickStats.pendingTasks}</div>
+                        <p className="text-xs text-muted-foreground mt-1">{quickStats.doneTasks} completed</p>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-orange-400">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Material Requests</CardTitle>
+                        <Package className="h-4 w-4 text-orange-400" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className={`text-2xl font-bold ${quickStats.pendingMaterials > 0 ? 'text-orange-500' : 'text-green-600'}`}>
+                            {quickStats.pendingMaterials}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">pending approval</p>
+                    </CardContent>
+                </Card>
+
+                <Card className="border-l-4 border-l-green-500">
+                    <CardHeader className="flex flex-row items-center justify-between pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Avg Project Progress</CardTitle>
+                        <Activity className="h-4 w-4 text-green-500" />
+                    </CardHeader>
+                    <CardContent>
+                        <div className="text-2xl font-bold text-green-600">{quickStats.avgProgress}%</div>
+                        <Progress value={quickStats.avgProgress} className="mt-2 h-1.5" />
+                    </CardContent>
+                </Card>
+            </div>
+
             {/* Filters */}
-            <Card className="print:hidden">
-                <CardContent className="pt-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="space-y-2">
-                            <Label htmlFor="report_type">Report Type</Label>
-                            <Select value={reportType} onValueChange={setReportType}>
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
+            <Card>
+                <CardContent className="pt-5 pb-4">
+                    <div className="flex flex-wrap gap-4 items-end">
+                        <div className="space-y-1.5 min-w-[180px]">
+                            <Label>Report View</Label>
+                            <Select value={reportType} onValueChange={(v: any) => setReportType(v)}>
+                                <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
                                 <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                                    <SelectItem value="overview" className="bg-white hover:bg-gray-100">Overview</SelectItem>
-                                    <SelectItem value="financial" className="bg-white hover:bg-gray-100">Financial</SelectItem>
-                                    <SelectItem value="projects" className="bg-white hover:bg-gray-100">Projects</SelectItem>
-                                    <SelectItem value="team" className="bg-white hover:bg-gray-100">Team Performance</SelectItem>
+                                    <SelectItem value="summary">Project Summary</SelectItem>
+                                    <SelectItem value="tasks">Task Breakdown</SelectItem>
+                                    <SelectItem value="materials">Material Requests</SelectItem>
+                                    {(userRole === 'Admin' || userRole === 'ProjectManager') && (
+                                        <SelectItem value="projects">Project Status</SelectItem>
+                                    )}
                                 </SelectContent>
                             </Select>
                         </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="date_range">Date Range</Label>
-                            <Select value={dateRange} onValueChange={setDateRange}>
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                                    <SelectItem value="week" className="bg-white hover:bg-gray-100">Last Week</SelectItem>
-                                    <SelectItem value="month" className="bg-white hover:bg-gray-100">Last Month</SelectItem>
-                                    <SelectItem value="quarter" className="bg-white hover:bg-gray-100">Last Quarter</SelectItem>
-                                    <SelectItem value="year" className="bg-white hover:bg-gray-100">Last Year</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-                        <div className="space-y-2">
-                            <Label htmlFor="project">Project Filter</Label>
+                        <div className="space-y-1.5 min-w-[200px]">
+                            <Label>Project Filter</Label>
                             <Select value={selectedProject} onValueChange={setSelectedProject}>
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
+                                <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
                                 <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                                    <SelectItem value="all" className="bg-white hover:bg-gray-100">All Projects</SelectItem>
-                                    {projects.map(project => (
-                                        <SelectItem key={project.project_id} value={project.project_id.toString()} className="bg-white hover:bg-gray-100">
-                                            {project.project_name}
+                                    <SelectItem value="all">All Projects</SelectItem>
+                                    {projects.map(p => (
+                                        <SelectItem key={p.project_id} value={String(p.project_id)}>
+                                            {p.project_name}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -775,17 +349,317 @@ export default function ReportsPage() {
             </Card>
 
             {loading ? (
-                <Card>
-                    <CardContent className="py-8 text-center text-muted-foreground">
-                        Loading report data...
-                    </CardContent>
-                </Card>
+                <Card><CardContent className="py-12 text-center text-muted-foreground">Loading report data...</CardContent></Card>
+            ) : summaries.length === 0 ? (
+                <Card><CardContent className="py-12 text-center text-muted-foreground">No project data found.</CardContent></Card>
             ) : (
                 <>
-                    {reportType === 'overview' && renderOverview()}
-                    {reportType === 'financial' && renderFinancialReport()}
-                    {reportType === 'projects' && renderProjectsReport()}
-                    {reportType === 'team' && renderTeamReport()}
+                    {/* ── Project Summary ── */}
+                    {reportType === 'summary' && (
+                        <div className="space-y-4">
+                            {summaries.map(s => {
+                                const taskPct = s.totalTasks > 0 ? Math.round((s.doneTasks / s.totalTasks) * 100) : 0;
+                                return (
+                                    <Card key={s.project.project_id} className="border-l-4 border-l-blue-400">
+                                        <CardHeader className="pb-3 border-b flex flex-row items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <FolderKanban className="h-5 w-5 text-blue-500" />
+                                                <div>
+                                                    <Link href={`/projects/${s.project.project_id}`} className="font-semibold text-base hover:underline text-blue-700">
+                                                        {s.project.project_name}
+                                                    </Link>
+                                                    <p className="text-xs text-muted-foreground">{s.project.location || 'No location'}</p>
+                                                </div>
+                                            </div>
+                                            <Badge className={STATUS_COLOR[s.project.status] || 'bg-slate-100 text-slate-600'}>
+                                                {s.project.status}
+                                            </Badge>
+                                        </CardHeader>
+                                        <CardContent className="pt-4">
+                                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                                {/* Total Cost */}
+                                                <div className="space-y-1">
+                                                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                                        <DollarSign className="h-3 w-3" /> Total Cost
+                                                    </p>
+                                                    <p className="text-lg font-bold text-blue-700">₹{fmt(s.totalCost)}</p>
+                                                </div>
+                                                {/* Tasks */}
+                                                <div className="space-y-1">
+                                                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                                        <ListTodo className="h-3 w-3" /> Tasks
+                                                    </p>
+                                                    <p className="text-lg font-bold">
+                                                        <span className="text-green-600">{s.doneTasks}</span>
+                                                        <span className="text-slate-400 text-sm font-normal"> / {s.totalTasks}</span>
+                                                    </p>
+                                                    <div className="flex items-center gap-1">
+                                                        <div className="flex-1 bg-slate-200 rounded-full h-1.5">
+                                                            <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${taskPct}%` }} />
+                                                        </div>
+                                                        <span className="text-xs text-muted-foreground">{taskPct}%</span>
+                                                    </div>
+                                                </div>
+                                                {/* Material Requests */}
+                                                <div className="space-y-1">
+                                                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                                        <Package className="h-3 w-3" /> Material Requests
+                                                    </p>
+                                                    <div className="flex gap-2 items-center">
+                                                        {s.pendingMaterials > 0 ? (
+                                                            <span className="inline-flex items-center gap-1 text-sm font-semibold text-amber-600">
+                                                                <AlertTriangle className="h-3.5 w-3.5" /> {s.pendingMaterials} pending
+                                                            </span>
+                                                        ) : (
+                                                            <span className="inline-flex items-center gap-1 text-sm font-semibold text-green-600">
+                                                                <CheckCircle2 className="h-3.5 w-3.5" /> All clear
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-xs text-muted-foreground">{s.approvedMaterials} approved/fulfilled</p>
+                                                </div>
+                                                {/* Activity Progress */}
+                                                <div className="space-y-1">
+                                                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                                        <Activity className="h-3 w-3" /> Activity Progress
+                                                    </p>
+                                                    <p className="text-lg font-bold text-green-600">{s.avgProgress}%</p>
+                                                    <div className="flex items-center gap-1">
+                                                        <div className="flex-1 bg-slate-200 rounded-full h-1.5">
+                                                            <div className="bg-green-500 h-1.5 rounded-full" style={{ width: `${s.avgProgress}%` }} />
+                                                        </div>
+                                                        <span className="text-xs text-muted-foreground">{s.completedActivities}/{s.totalActivities}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </CardContent>
+                                    </Card>
+                                );
+                            })}
+                        </div>
+                    )}
+
+                    {/* ── Task Breakdown ── */}
+                    {reportType === 'tasks' && (
+                        <Card>
+                            <CardHeader className="border-b">
+                                <CardTitle className="flex items-center gap-2">
+                                    <ListTodo className="h-5 w-5 text-amber-500" /> Task Breakdown by Project
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="pt-4">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Project</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead className="text-center">Total</TableHead>
+                                            <TableHead className="text-center">Done</TableHead>
+                                            <TableHead className="text-center">Pending</TableHead>
+                                            <TableHead>Completion</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {summaries.map(s => {
+                                            const pct = s.totalTasks > 0 ? Math.round((s.doneTasks / s.totalTasks) * 100) : 0;
+                                            return (
+                                                <TableRow key={s.project.project_id}>
+                                                    <TableCell>
+                                                        <Link href={`/projects/${s.project.project_id}`} className="font-medium text-blue-600 hover:underline">
+                                                            {s.project.project_name}
+                                                        </Link>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge className={STATUS_COLOR[s.project.status] || 'bg-slate-100 text-slate-600'}>
+                                                            {s.project.status}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="text-center font-semibold">{s.totalTasks}</TableCell>
+                                                    <TableCell className="text-center">
+                                                        <span className="text-green-600 font-semibold">{s.doneTasks}</span>
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        {s.pendingTasks > 0
+                                                            ? <span className="text-amber-600 font-semibold">{s.pendingTasks}</span>
+                                                            : <span className="text-slate-400">0</span>}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="flex-1 bg-slate-200 rounded-full h-2">
+                                                                <div className="bg-green-500 h-2 rounded-full" style={{ width: `${pct}%` }} />
+                                                            </div>
+                                                            <span className="text-xs font-semibold w-9 text-right">{pct}%</span>
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
+                                        {/* Totals row */}
+                                        <TableRow className="bg-slate-50 font-semibold border-t-2">
+                                            <TableCell colSpan={2} className="font-bold">Total</TableCell>
+                                            <TableCell className="text-center">{summaries.reduce((s, r) => s + r.totalTasks, 0)}</TableCell>
+                                            <TableCell className="text-center text-green-600">{summaries.reduce((s, r) => s + r.doneTasks, 0)}</TableCell>
+                                            <TableCell className="text-center text-amber-600">{summaries.reduce((s, r) => s + r.pendingTasks, 0)}</TableCell>
+                                            <TableCell />
+                                        </TableRow>
+                                    </TableBody>
+                                </Table>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* ── Material Requests ── */}
+                    {reportType === 'materials' && (
+                        <Card>
+                            <CardHeader className="border-b">
+                                <CardTitle className="flex items-center gap-2">
+                                    <Package className="h-5 w-5 text-orange-400" /> Material Request Status by Project
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="pt-4">
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Project</TableHead>
+                                            <TableHead>Status</TableHead>
+                                            <TableHead className="text-center">Pending</TableHead>
+                                            <TableHead className="text-center">Approved / Fulfilled</TableHead>
+                                            <TableHead>Pending Rate</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {summaries.map(s => {
+                                            const total = s.pendingMaterials + s.approvedMaterials;
+                                            const pct = total > 0 ? Math.round((s.pendingMaterials / total) * 100) : 0;
+                                            return (
+                                                <TableRow key={s.project.project_id}>
+                                                    <TableCell>
+                                                        <Link href={`/projects/${s.project.project_id}`} className="font-medium text-blue-600 hover:underline">
+                                                            {s.project.project_name}
+                                                        </Link>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge className={STATUS_COLOR[s.project.status] || 'bg-slate-100 text-slate-600'}>
+                                                            {s.project.status}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        {s.pendingMaterials > 0
+                                                            ? <span className="inline-flex items-center gap-1 text-amber-600 font-semibold"><AlertTriangle className="h-3.5 w-3.5" />{s.pendingMaterials}</span>
+                                                            : <span className="text-slate-400">0</span>}
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        <span className="text-green-600 font-semibold">{s.approvedMaterials}</span>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        {total === 0 ? (
+                                                            <span className="text-xs text-slate-400">No requests</span>
+                                                        ) : (
+                                                            <div className="flex items-center gap-2">
+                                                                <div className="flex-1 bg-slate-200 rounded-full h-2">
+                                                                    <div className={`h-2 rounded-full ${pct > 50 ? 'bg-amber-400' : 'bg-green-500'}`} style={{ width: `${pct}%` }} />
+                                                                </div>
+                                                                <span className="text-xs font-semibold w-9 text-right">{pct}%</span>
+                                                            </div>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
+                                    </TableBody>
+                                </Table>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* ── Project Status (Admin only) ── */}
+                    {reportType === 'projects' && (userRole === 'Admin' || userRole === 'ProjectManager') && (
+                        <div className="space-y-4">
+                            {/* Status distribution */}
+                            <Card>
+                                <CardHeader className="border-b pb-3">
+                                    <CardTitle className="flex items-center gap-2 text-base">
+                                        <BarChart3 className="h-5 w-5 text-blue-500" /> Status Distribution
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="pt-4 space-y-3">
+                                    {['Planning', 'Execution', 'Handover', 'Completed'].map(status => {
+                                        const count = projects.filter(p => p.status === status).length;
+                                        const pct = projects.length > 0 ? Math.round((count / projects.length) * 100) : 0;
+                                        return (
+                                            <div key={status} className="space-y-1">
+                                                <div className="flex justify-between text-sm">
+                                                    <span className="font-medium">{status}</span>
+                                                    <span className="text-muted-foreground">{count} project{count !== 1 ? 's' : ''} ({pct}%)</span>
+                                                </div>
+                                                <div className="bg-slate-200 rounded-full h-2">
+                                                    <div className={`h-2 rounded-full ${STATUS_BAR[status] || 'bg-slate-400'}`} style={{ width: `${pct}%`, minWidth: count > 0 ? '6px' : undefined }} />
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </CardContent>
+                            </Card>
+
+                            <Card>
+                                <CardHeader className="border-b pb-3">
+                                    <CardTitle className="flex items-center gap-2 text-base">
+                                        <FileText className="h-5 w-5 text-blue-500" /> All Projects
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="pt-4">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow>
+                                                <TableHead>Project</TableHead>
+                                                <TableHead>Status</TableHead>
+                                                <TableHead>Location</TableHead>
+                                                <TableHead>Start Date</TableHead>
+                                                <TableHead className="text-right">Total Cost</TableHead>
+                                                <TableHead className="text-center">Tasks</TableHead>
+                                                <TableHead>Progress</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {summaries.map(s => (
+                                                <TableRow key={s.project.project_id}>
+                                                    <TableCell>
+                                                        <Link href={`/projects/${s.project.project_id}`} className="font-medium text-blue-600 hover:underline">
+                                                            {s.project.project_name}
+                                                        </Link>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <Badge className={STATUS_COLOR[s.project.status] || 'bg-slate-100 text-slate-600'}>
+                                                            {s.project.status}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="text-sm text-muted-foreground">{s.project.location || '—'}</TableCell>
+                                                    <TableCell className="text-sm text-muted-foreground">
+                                                        {s.project.start_date ? new Date(s.project.start_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-semibold text-blue-700">
+                                                        {s.totalCost > 0 ? `₹${fmt(s.totalCost)}` : '—'}
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        <span className="text-green-600 font-semibold">{s.doneTasks}</span>
+                                                        <span className="text-muted-foreground text-xs"> / {s.totalTasks}</span>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="flex-1 bg-slate-200 rounded-full h-2">
+                                                                <div className="bg-green-500 h-2 rounded-full" style={{ width: `${s.avgProgress}%` }} />
+                                                            </div>
+                                                            <span className="text-xs font-semibold w-9 text-right">{s.avgProgress}%</span>
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            ))}
+                                        </TableBody>
+                                    </Table>
+                                </CardContent>
+                            </Card>
+                        </div>
+                    )}
                 </>
             )}
         </div>

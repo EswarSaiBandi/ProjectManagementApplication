@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Plus, Search, CheckCircle2, Circle, Clock, Filter, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Search, CheckCircle2, Circle, Clock, Pencil, Trash2, FolderKanban, User, CalendarDays, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import Link from 'next/link';
 
@@ -47,8 +47,13 @@ export default function TasksPage() {
     const [projectFilter, setProjectFilter] = useState<string>('all');
     const [tasks, setTasks] = useState<ProjectTask[]>([]);
     const [loading, setLoading] = useState(true);
+    const [initializing, setInitializing] = useState(true);
     const [projects, setProjects] = useState<Project[]>([]);
-    const [teamNames, setTeamNames] = useState<string[]>([]);
+    const [userRole, setUserRole] = useState<string | null>(null);
+    const [assignableMembers, setAssignableMembers] = useState<{ user_id: string; full_name: string; role: string }[]>([]);
+    const [loadingAssignees, setLoadingAssignees] = useState(false);
+    // undefined = role not yet determined (block fetches), null = no restriction (Admin/PM), number[] = restricted
+    const [allowedProjectIds, setAllowedProjectIds] = useState<number[] | null | undefined>(undefined);
 
     // Dialog state
     const [isOpen, setIsOpen] = useState(false);
@@ -67,18 +72,56 @@ export default function TasksPage() {
     });
 
     useEffect(() => {
-        fetchProjects();
-        fetchTeamNames();
+        initPage();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
-        fetchTasks();
+        if (allowedProjectIds !== undefined) fetchTasks(allowedProjectIds);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [statusFilter, projectFilter]);
+    }, [statusFilter, projectFilter, allowedProjectIds]);
 
-    const fetchProjects = async () => {
-        const { data, error } = await supabase.from('projects').select('project_id, project_name').order('project_name');
+    const initPage = async () => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) return;
+
+            const { data: profile } = await supabase
+                .from('profiles')
+                .select('role')
+                .eq('user_id', user.id)
+                .single();
+
+            const role = profile?.role || null;
+            setUserRole(role);
+
+            if (role === 'SiteSupervisor') {
+                const { data: memberships } = await supabase
+                    .from('project_members')
+                    .select('project_id')
+                    .eq('user_id', user.id);
+                const ids = (memberships || []).map((m: any) => Number(m.project_id));
+                setAllowedProjectIds(ids);
+                await fetchProjects(ids, ids);
+            } else {
+                setAllowedProjectIds(null);
+                await fetchProjects(null, null);
+            }
+        } finally {
+            setInitializing(false);
+        }
+    };
+
+    const fetchProjects = async (restrictToIds: number[] | null, taskIds: number[] | null) => {
+        let query = supabase.from('projects').select('project_id, project_name').order('project_name');
+        if (restrictToIds !== null && restrictToIds.length > 0) {
+            query = query.in('project_id', restrictToIds);
+        } else if (restrictToIds !== null && restrictToIds.length === 0) {
+            setProjects([]);
+            fetchTasks(taskIds);
+            return;
+        }
+        const { data, error } = await query;
         if (error) {
             console.error('Projects fetch error:', error);
             setProjects([]);
@@ -88,27 +131,69 @@ export default function TasksPage() {
         if (!form.project_id && (data || []).length) {
             setForm((p) => ({ ...p, project_id: String((data || [])[0].project_id) }));
         }
-        // Ensure tasks list gets project names once projects load
-        fetchTasks();
+        fetchTasks(taskIds);
     };
 
-    const fetchTeamNames = async () => {
-        const { data, error } = await supabase.from('profiles').select('full_name').order('full_name');
-        if (error) {
-            console.error('Profiles fetch error:', error);
-            setTeamNames([]);
-            return;
+    const fetchAssignableMembers = async (projectId: string) => {
+        if (!projectId) { setAssignableMembers([]); return; }
+        setLoadingAssignees(true);
+        const pid = Number(projectId);
+
+        // Admin + PM always eligible
+        const { data: adminData } = await supabase
+            .from('profiles')
+            .select('user_id, full_name, role')
+            .in('role', ['Admin', 'ProjectManager'])
+            .eq('is_active', true)
+            .order('full_name');
+
+        // SiteSupervisors assigned to this project
+        const { data: memberRows } = await supabase
+            .from('project_members')
+            .select('user_id')
+            .eq('project_id', pid);
+
+        const supIds = (memberRows || []).map((m: any) => m.user_id);
+        let supData: any[] = [];
+        if (supIds.length > 0) {
+            const { data: sd } = await supabase
+                .from('profiles')
+                .select('user_id, full_name, role')
+                .in('user_id', supIds)
+                .eq('role', 'SiteSupervisor')
+                .eq('is_active', true)
+                .order('full_name');
+            supData = sd || [];
         }
-        const names = (data || []).map((r: any) => String(r.full_name || '').trim()).filter(Boolean);
-        setTeamNames(Array.from(new Set(names)));
+
+        const merged = [...(adminData || []), ...supData];
+        const seen = new Set<string>();
+        const unique = merged.filter(p => {
+            if (seen.has(p.user_id) || !p.full_name) return false;
+            seen.add(p.user_id); return true;
+        });
+        setAssignableMembers(unique);
+        setLoadingAssignees(false);
     };
 
-    const fetchTasks = async () => {
+    const fetchTasks = async (idsOverride?: number[] | null) => {
+        // Use explicit override if provided, otherwise fall back to state
+        const effectiveIds: number[] | null = idsOverride !== undefined ? (idsOverride ?? null) : (allowedProjectIds ?? null);
         try {
             setLoading(true);
-            // Schema-safe: avoid selecting columns that may not exist (task_id/created_at vary across installs)
-            const { data, error } = await supabase.from('project_tasks').select('*');
+            let query = supabase.from('project_tasks').select('*');
 
+            // Restrict to assigned projects for Site Supervisors
+            if (effectiveIds !== null) {
+                if (effectiveIds.length === 0) {
+                    setTasks([]);
+                    setLoading(false);
+                    return;
+                }
+                query = query.in('project_id', effectiveIds);
+            }
+
+            const { data, error } = await query;
             if (error) throw error;
 
             // Filter by status if needed (case-insensitive)
@@ -120,12 +205,20 @@ export default function TasksPage() {
                 filteredData = filteredData.filter((t) => (t.status || '').toLowerCase() === statusFilter.toLowerCase());
             }
 
+            // Always fetch project names fresh from DB to avoid stale state
+            const uniqueProjectIds = Array.from(new Set(filteredData.map((t: any) => Number(t.project_id))));
             const projectNameById = new Map<number, string>();
-            projects.forEach((p) => projectNameById.set(p.project_id, p.project_name));
+            if (uniqueProjectIds.length > 0) {
+                const { data: projData } = await supabase
+                    .from('projects')
+                    .select('project_id, project_name')
+                    .in('project_id', uniqueProjectIds);
+                (projData || []).forEach((p: any) => projectNameById.set(Number(p.project_id), p.project_name));
+            }
 
             const rows: ProjectTask[] = filteredData.map((t: any) => ({
                 ...t,
-                project_name: projectNameById.get(Number(t.project_id)) || undefined,
+                project_name: projectNameById.get(Number(t.project_id)) || `Project #${t.project_id}`,
             }));
 
             // Client-side sort (prefer updated_at/created_at/id/task_id)
@@ -201,8 +294,10 @@ export default function TasksPage() {
     const openNew = () => {
         setEditing(null);
         setEditingKey(null);
+        // Start with empty project so user must pick one first
+        const defaultProject = projectFilter !== 'all' ? projectFilter : '';
         setForm({
-            project_id: projectFilter !== 'all' ? projectFilter : (projects[0]?.project_id ? String(projects[0].project_id) : ''),
+            project_id: defaultProject,
             title: '',
             description: '',
             status: 'Todo',
@@ -210,6 +305,8 @@ export default function TasksPage() {
             due_date: '',
             assignee_name: '',
         });
+        setAssignableMembers([]);
+        if (defaultProject) fetchAssignableMembers(defaultProject);
         setIsOpen(true);
     };
 
@@ -222,8 +319,9 @@ export default function TasksPage() {
                     ? { column: 'task_id' as const, value: t.task_id }
                     : null;
         setEditingKey(key);
+        const pid = String(t.project_id);
         setForm({
-            project_id: String(t.project_id),
+            project_id: pid,
             title: t.title || '',
             description: t.description || '',
             status: t.status || 'Todo',
@@ -231,20 +329,18 @@ export default function TasksPage() {
             due_date: t.due_date ? String(t.due_date).split('T')[0] : '',
             assignee_name: t.assignee_name || '',
         });
+        fetchAssignableMembers(pid);
         setIsOpen(true);
     };
 
     const handleSave = async () => {
         if (isSaving) return;
         const projectIdNum = Number(form.project_id);
-        if (!Number.isFinite(projectIdNum)) {
-            toast.error('Project is required');
-            return;
-        }
-        if (!form.title.trim()) {
-            toast.error('Title is required');
-            return;
-        }
+        if (!Number.isFinite(projectIdNum))  { toast.error('Project is required'); return; }
+        if (!form.title.trim())              { toast.error('Title is required'); return; }
+        if (!form.description.trim())        { toast.error('Description is required'); return; }
+        if (!form.due_date)                  { toast.error('Due date is required'); return; }
+        if (!form.assignee_name.trim())      { toast.error('Assignee is required'); return; }
 
         setIsSaving(true);
         const { data: userData } = await supabase.auth.getUser();
@@ -333,6 +429,14 @@ export default function TasksPage() {
         fetchTasks();
     };
 
+    if (initializing) {
+        return (
+            <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+                Loading...
+            </div>
+        );
+    }
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -350,21 +454,24 @@ export default function TasksPage() {
                     <DialogContent className="bg-white max-w-2xl">
                         <DialogHeader>
                             <DialogTitle>{editing ? 'Edit Task' : 'New Task'}</DialogTitle>
-                            <DialogDescription>Create tasks using the shared `project_tasks` table.</DialogDescription>
+                            <DialogDescription>
+                                {editing ? 'Update the task details below.' : 'Select a project first — assignee options will update accordingly.'}
+                            </DialogDescription>
                         </DialogHeader>
 
-                        <datalist id="team-member-names">
-                            {teamNames.map((n) => (
-                                <option key={n} value={n} />
-                            ))}
-                        </datalist>
-
                         <div className="space-y-4 py-2">
+                            {/* Project — must be picked first */}
                             <div className="space-y-2">
                                 <Label>Project *</Label>
-                                <Select value={form.project_id} onValueChange={(v) => setForm((p) => ({ ...p, project_id: v }))}>
+                                <Select
+                                    value={form.project_id}
+                                    onValueChange={(v) => {
+                                        setForm((p) => ({ ...p, project_id: v, assignee_name: '' }));
+                                        fetchAssignableMembers(v);
+                                    }}
+                                >
                                     <SelectTrigger className="bg-white">
-                                        <SelectValue placeholder="Select project" />
+                                        <SelectValue placeholder="Select a project first..." />
                                     </SelectTrigger>
                                     <SelectContent className="bg-white border border-gray-200 shadow-lg">
                                         {projects.map((p) => (
@@ -376,63 +483,79 @@ export default function TasksPage() {
                                 </Select>
                             </div>
 
-                            <div className="space-y-2">
-                                <Label>Title *</Label>
-                                <Input value={form.title} onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))} className="bg-white" />
-                            </div>
-
-                            <div className="space-y-2">
-                                <Label>Description</Label>
-                                <Textarea value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} className="bg-white" />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
+                            {/* Rest of form — visually dimmed until project selected */}
+                            <div className={`space-y-4 transition-opacity ${!form.project_id ? 'opacity-40 pointer-events-none' : ''}`}>
                                 <div className="space-y-2">
-                                    <Label>Status</Label>
-                                    <Select value={form.status} onValueChange={(v) => setForm((p) => ({ ...p, status: v }))}>
-                                        <SelectTrigger className="bg-white">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                                            {STATUS_OPTIONS.map((s) => (
-                                                <SelectItem key={s} value={s} className="bg-white hover:bg-gray-100">
-                                                    {s}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <Label>Title *</Label>
+                                    <Input value={form.title} onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))} className="bg-white" placeholder="e.g. Finalize electrical BOQ" />
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>Priority</Label>
-                                    <Select value={form.priority} onValueChange={(v) => setForm((p) => ({ ...p, priority: v }))}>
-                                        <SelectTrigger className="bg-white">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent className="bg-white border border-gray-200 shadow-lg">
-                                            {PRIORITY_OPTIONS.map((p) => (
-                                                <SelectItem key={p} value={p} className="bg-white hover:bg-gray-100">
-                                                    {p}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            </div>
 
-                            <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                    <Label>Due date</Label>
-                                    <Input type="date" value={form.due_date} onChange={(e) => setForm((p) => ({ ...p, due_date: e.target.value }))} className="bg-white" />
+                                    <Label>Description *</Label>
+                                    <Textarea value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} className="bg-white" rows={2} />
                                 </div>
-                                <div className="space-y-2">
-                                    <Label>Assignee</Label>
-                                    <Input
-                                        list="team-member-names"
-                                        value={form.assignee_name}
-                                        onChange={(e) => setForm((p) => ({ ...p, assignee_name: e.target.value }))}
-                                        className="bg-white"
-                                        placeholder="Start typing name..."
-                                    />
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label>Status *</Label>
+                                        <Select value={form.status} onValueChange={(v) => setForm((p) => ({ ...p, status: v }))}>
+                                            <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+                                            <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                                                {STATUS_OPTIONS.map((s) => (
+                                                    <SelectItem key={s} value={s} className="bg-white hover:bg-gray-100">{s}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Priority *</Label>
+                                        <Select value={form.priority} onValueChange={(v) => setForm((p) => ({ ...p, priority: v }))}>
+                                            <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
+                                            <SelectContent className="bg-white border border-gray-200 shadow-lg">
+                                                {PRIORITY_OPTIONS.map((p) => (
+                                                    <SelectItem key={p} value={p} className="bg-white hover:bg-gray-100">{p}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label>Due date *</Label>
+                                        <Input type="date" value={form.due_date} onChange={(e) => setForm((p) => ({ ...p, due_date: e.target.value }))} className="bg-white" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>
+                                            Assignee *
+                                            {loadingAssignees && <span className="ml-2 text-xs text-muted-foreground">Loading...</span>}
+                                        </Label>
+                                        <Select
+                                            value={form.assignee_name}
+                                            onValueChange={(v) => setForm((p) => ({ ...p, assignee_name: v === '__none__' ? '' : v }))}
+                                        >
+                                            <SelectTrigger className="bg-white">
+                                                <SelectValue placeholder="Select assignee..." />
+                                            </SelectTrigger>
+                                            <SelectContent className="bg-white border border-gray-200 shadow-lg z-[9999]">
+                                                <SelectItem value="__none__" className="text-slate-400 italic">Unassigned</SelectItem>
+                                                {assignableMembers.map((m) => (
+                                                    <SelectItem key={m.user_id} value={m.full_name} className="bg-white hover:bg-gray-100">
+                                                        <span>{m.full_name}</span>
+                                                        <span className="ml-2 text-xs text-slate-400">
+                                                            {m.role === 'SiteSupervisor' ? '· Supervisor' : m.role === 'Admin' ? '· Admin' : '· PM'}
+                                                        </span>
+                                                    </SelectItem>
+                                                ))}
+                                                {assignableMembers.length === 0 && !loadingAssignees && (
+                                                    <div className="px-3 py-2 text-xs text-slate-400 italic">No eligible members for this project</div>
+                                                )}
+                                            </SelectContent>
+                                        </Select>
+                                        {assignableMembers.length === 0 && !loadingAssignees && form.project_id && (
+                                            <p className="text-xs text-amber-600">No supervisors assigned to this project. Add them via the Members tab.</p>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -516,7 +639,7 @@ export default function TasksPage() {
                         </Select>
                         <Select value={statusFilter} onValueChange={setStatusFilter}>
                             <SelectTrigger className="w-[180px]">
-                                <Filter className="mr-2 h-4 w-4" />
+                                <Search className="mr-2 h-4 w-4" />
                                 <SelectValue placeholder="Status" />
                             </SelectTrigger>
                             <SelectContent className="bg-white border border-gray-200 shadow-lg">
@@ -531,76 +654,115 @@ export default function TasksPage() {
             </Card>
 
             {/* Task List */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>Task List</CardTitle>
-                </CardHeader>
-                <CardContent>
-                    {loading ? (
-                        <div className="text-center py-8 text-muted-foreground">Loading tasks...</div>
-                    ) : filteredTasks.length === 0 ? (
-                        <div className="text-center py-8 text-muted-foreground">
-                            {searchQuery ? 'No tasks found matching your search.' : 'No tasks found.'}
-                        </div>
-                    ) : (
-                        <div className="space-y-4">
-                            {filteredTasks.map((task) => (
-                                <div
-                                    key={(task.id ?? task.task_id ?? `${task.project_id}-${task.title}`) as any}
-                                    className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"
-                                >
-                                    <div className="flex items-center gap-4 flex-1">
-                                        {getStatusIcon(task.status)}
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-2">
-                                                <h3 className="font-semibold">{task.title}</h3>
-                                                {getStatusBadge(task.status)}
-                                                <Badge variant="outline">{task.priority || '—'}</Badge>
+            <div className="space-y-3">
+                {loading ? (
+                    <Card><CardContent className="text-center py-10 text-muted-foreground">Loading tasks...</CardContent></Card>
+                ) : filteredTasks.length === 0 ? (
+                    <Card><CardContent className="text-center py-10 text-muted-foreground">
+                        {searchQuery ? 'No tasks match your search.' : 'No tasks found.'}
+                    </CardContent></Card>
+                ) : (
+                    filteredTasks.map((task) => {
+                        const isDone = (task.status || '').toLowerCase() === 'done';
+                        const isOverdue = task.due_date && !isDone && new Date(task.due_date) < new Date();
+                        const priorityBorder: Record<string, string> = {
+                            High: 'border-l-red-500',
+                            Medium: 'border-l-amber-400',
+                            Low: 'border-l-slate-300',
+                        };
+                        const priorityBadge: Record<string, string> = {
+                            High: 'bg-red-100 text-red-700',
+                            Medium: 'bg-amber-100 text-amber-700',
+                            Low: 'bg-slate-100 text-slate-600',
+                        };
+                        const statusBadge: Record<string, string> = {
+                            'done': 'bg-green-100 text-green-700',
+                            'in progress': 'bg-blue-100 text-blue-700',
+                            'todo': 'bg-slate-100 text-slate-600',
+                        };
+                        const borderClass = isDone ? 'border-l-green-400' : (priorityBorder[task.priority] || 'border-l-slate-300');
+                        return (
+                            <Card
+                                key={(task.id ?? task.task_id ?? `${task.project_id}-${task.title}`) as any}
+                                className={`border-l-4 ${borderClass} ${isDone ? 'opacity-60' : ''} hover:shadow-sm transition-shadow`}
+                            >
+                                <CardContent className="py-4">
+                                    <div className="flex items-start justify-between gap-4">
+                                        {/* Left: content */}
+                                        <div className="flex gap-3 flex-1 min-w-0">
+                                            <div className="mt-0.5 flex-shrink-0">
+                                                {isDone
+                                                    ? <CheckCircle2 className="h-5 w-5 text-green-500" />
+                                                    : isOverdue
+                                                        ? <AlertCircle className="h-5 w-5 text-red-500" />
+                                                        : <Circle className="h-5 w-5 text-slate-300" />
+                                                }
                                             </div>
-                                            <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
-                                                <span>{getProjectName(task)}</span>
-                                                {task.assignee_name && (
-                                                    <>
-                                                        <span>•</span>
-                                                        <span>{task.assignee_name}</span>
-                                                    </>
+                                            <div className="flex-1 min-w-0 space-y-1.5">
+                                                {/* Title + badges */}
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <h3 className={`font-semibold text-slate-900 ${isDone ? 'line-through text-muted-foreground' : ''}`}>
+                                                        {task.title}
+                                                    </h3>
+                                                    <Badge className={`text-xs ${statusBadge[(task.status || '').toLowerCase()] || 'bg-slate-100 text-slate-600'}`}>
+                                                        {task.status || 'Todo'}
+                                                    </Badge>
+                                                    <Badge className={`text-xs ${priorityBadge[task.priority] || 'bg-slate-100 text-slate-600'}`}>
+                                                        {task.priority || '—'}
+                                                    </Badge>
+                                                </div>
+
+                                                {/* Meta row */}
+                                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                                    <Link href={`/projects/${task.project_id}`} className="flex items-center gap-1 hover:text-blue-600 transition-colors">
+                                                        <FolderKanban className="h-3.5 w-3.5" />
+                                                        <span className="font-medium text-slate-600">{task.project_name || getProjectName(task)}</span>
+                                                    </Link>
+                                                    {task.assignee_name && (
+                                                        <span className="flex items-center gap-1">
+                                                            <User className="h-3.5 w-3.5" />
+                                                            {task.assignee_name}
+                                                        </span>
+                                                    )}
+                                                    {task.due_date && (
+                                                        <span className={`flex items-center gap-1 ${isOverdue ? 'text-red-500 font-medium' : ''}`}>
+                                                            <CalendarDays className="h-3.5 w-3.5" />
+                                                            {isOverdue ? 'Overdue · ' : 'Due '}
+                                                            {new Date(task.due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {/* Description */}
+                                                {task.description && (
+                                                    <p className="text-sm text-muted-foreground line-clamp-2">{task.description}</p>
                                                 )}
-                                                {task.due_date ? (
-                                                    <>
-                                                        <span>•</span>
-                                                        <span>Due: {new Date(task.due_date).toLocaleDateString()}</span>
-                                                    </>
-                                                ) : null}
                                             </div>
-                                            {task.description && (
-                                                <p className="text-sm text-muted-foreground mt-1">{task.description}</p>
+                                        </div>
+
+                                        {/* Right: actions */}
+                                        <div className="flex gap-1.5 items-center flex-shrink-0">
+                                            {!isDone && (
+                                                <Button variant="outline" size="sm" onClick={() => quickMarkDone(task)} title="Mark done"
+                                                    className="border-green-400 text-green-600 hover:bg-green-50">
+                                                    <CheckCircle2 className="h-4 w-4" />
+                                                </Button>
                                             )}
+                                            <Button variant="outline" size="sm" onClick={() => openEdit(task)} title="Edit">
+                                                <Pencil className="h-4 w-4" />
+                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => handleDelete(task)} title="Delete"
+                                                className="border-red-200 text-red-500 hover:bg-red-50">
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
                                         </div>
                                     </div>
-                                    <div className="flex gap-2 items-center">
-                                        {(task.status || '').toLowerCase() !== 'done' ? (
-                                            <Button variant="outline" size="sm" onClick={() => quickMarkDone(task)} title="Mark done">
-                                                <CheckCircle2 className="h-4 w-4" />
-                                            </Button>
-                                        ) : null}
-                                        <Button variant="outline" size="sm" onClick={() => openEdit(task)} title="Edit">
-                                            <Pencil className="h-4 w-4" />
-                                        </Button>
-                                        <Button variant="outline" size="sm" onClick={() => handleDelete(task)} title="Delete">
-                                            <Trash2 className="h-4 w-4" />
-                                        </Button>
-                                        <Link href={`/projects/${task.project_id}`}>
-                                            <Button variant="outline" size="sm">
-                                                View
-                                            </Button>
-                                        </Link>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
+                                </CardContent>
+                            </Card>
+                        );
+                    })
+                )}
+            </div>
         </div>
     );
 }
