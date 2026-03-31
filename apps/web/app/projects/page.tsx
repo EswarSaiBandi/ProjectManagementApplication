@@ -177,19 +177,29 @@ export default function ProjectsPage() {
             return;
         }
 
-        const { error } = await supabase
-            .from('projects')
-            .delete()
-            .eq('project_id', projectToDelete.project_id);
+        try {
+            // material_movement_logs.project_id is not cascade; clear dependent logs first.
+            const { error: movementDeleteError } = await supabase
+                .from('material_movement_logs')
+                .delete()
+                .eq('project_id', projectToDelete.project_id);
 
-        if (!error) {
+            if (movementDeleteError) throw movementDeleteError;
+
+            const { error } = await supabase
+                .from('projects')
+                .delete()
+                .eq('project_id', projectToDelete.project_id);
+
+            if (error) throw error;
+
             toast.success("Project deleted successfully");
             setIsDeleteDialogOpen(false);
             setProjectToDelete(null);
             fetchProjects();
-        } else {
+        } catch (error: any) {
             console.error("Error deleting project:", error);
-            toast.error("Failed to delete project");
+            toast.error(error?.message || "Failed to delete project");
         }
     };
 
