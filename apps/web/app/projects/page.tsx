@@ -186,6 +186,14 @@ export default function ProjectsPage() {
 
             if (movementDeleteError) throw movementDeleteError;
 
+            // transactions.project_id can also block project deletion.
+            const { error: transactionDeleteError } = await supabase
+                .from('transactions')
+                .delete()
+                .eq('project_id', projectToDelete.project_id);
+
+            if (transactionDeleteError) throw transactionDeleteError;
+
             const { error } = await supabase
                 .from('projects')
                 .delete()
