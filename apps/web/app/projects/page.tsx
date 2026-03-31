@@ -178,26 +178,39 @@ export default function ProjectsPage() {
         }
 
         try {
-            // material_movement_logs.project_id is not cascade; clear dependent logs first.
-            const { error: movementDeleteError } = await supabase
-                .from('material_movement_logs')
-                .delete()
-                .eq('project_id', projectToDelete.project_id);
+            const projectId = projectToDelete.project_id;
+            const deleteByProjectId = async (table: string) => {
+                const { error } = await supabase
+                    .from(table)
+                    .delete()
+                    .eq('project_id', projectId);
+                if (error) throw error;
+            };
 
-            if (movementDeleteError) throw movementDeleteError;
-
-            // transactions.project_id can also block project deletion.
-            const { error: transactionDeleteError } = await supabase
-                .from('transactions')
-                .delete()
-                .eq('project_id', projectToDelete.project_id);
-
-            if (transactionDeleteError) throw transactionDeleteError;
+            // Child tables that can block project deletion in environments where FK is not CASCADE.
+            await deleteByProjectId('material_movement_logs');
+            await deleteByProjectId('transactions');
+            await deleteByProjectId('project_notes');
+            await deleteByProjectId('project_tasks');
+            await deleteByProjectId('project_files');
+            await deleteByProjectId('project_moodboard_items');
+            await deleteByProjectId('project_quotes');
+            await deleteByProjectId('project_orders');
+            await deleteByProjectId('project_invoices');
+            await deleteByProjectId('client_updates');
+            await deleteByProjectId('site_activities');
+            await deleteByProjectId('project_manpower');
+            await deleteByProjectId('project_checklist_items');
+            await deleteByProjectId('project_cost_ledger');
+            await deleteByProjectId('material_requests');
+            await deleteByProjectId('material_returns');
+            await deleteByProjectId('project_members');
+            await deleteByProjectId('outsourced_payments');
 
             const { error } = await supabase
                 .from('projects')
                 .delete()
-                .eq('project_id', projectToDelete.project_id);
+                .eq('project_id', projectId);
 
             if (error) throw error;
 
