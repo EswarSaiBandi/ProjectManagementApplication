@@ -184,7 +184,15 @@ export default function ProjectsPage() {
                     .from(table)
                     .delete()
                     .eq('project_id', projectId);
-                if (error) throw error;
+                if (error) {
+                    const msg = String(error.message || '').toLowerCase();
+                    const isMissingTable =
+                        error.code === 'PGRST204' ||
+                        msg.includes('could not find the table') ||
+                        msg.includes('relation') && msg.includes('does not exist');
+                    if (isMissingTable) return;
+                    throw error;
+                }
             };
 
             // Child tables that can block project deletion in environments where FK is not CASCADE.
