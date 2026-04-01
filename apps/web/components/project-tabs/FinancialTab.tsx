@@ -515,7 +515,7 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                 <div className="flex items-start gap-2">
                                     <Users className="h-4 w-4 text-purple-600 mt-1 shrink-0" />
                                     <div>
-                                        <p className="text-xs text-muted-foreground">Labour Costs (Total)</p>
+                                        <p className="text-xs text-muted-foreground">Manpower costs (total)</p>
                                         <p className="font-semibold text-sm">
                                             {costLoading ? '...' : formatCurrency((costSummary?.labor_cost_inhouse || 0) + (costSummary?.labor_cost_outsourced || 0))}
                                         </p>

@@ -213,7 +213,7 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
     } else {
       const dw = Number(form.daily_wage);
       if (!form.daily_wage || !Number.isFinite(dw) || dw <= 0) {
-        toast.error('Daily wage is required for outsourced labour'); return;
+        toast.error('Daily wage is required for outsourced contractors'); return;
       }
     }
 
@@ -265,10 +265,10 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2">
-              <Users className="h-5 w-5 text-slate-500" /> Manpower &amp; Labour Management
+              <Users className="h-5 w-5 text-slate-500" /> Manpower management
             </CardTitle>
             <Button onClick={openNew} className="bg-blue-600 text-white hover:bg-blue-700 h-9">
-              <Plus className="h-4 w-4 mr-2" /> Add Labour
+              <Plus className="h-4 w-4 mr-2" /> Add person
             </Button>
           </div>
         </CardHeader>
@@ -363,7 +363,7 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
               {loading ? (
                 <div className="py-8 text-center text-muted-foreground">Loading...</div>
               ) : outsourcedRows.length === 0 ? (
-                <div className="py-10 text-center text-muted-foreground">No outsourced labour assigned yet.</div>
+                <div className="py-10 text-center text-muted-foreground">No outsourced assignments yet.</div>
               ) : (
                 <Table>
                   <TableHeader>
@@ -424,7 +424,7 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
       <Dialog open={isOpen} onOpenChange={(o) => { setIsOpen(o); if (!o) { setEditing(null); resetForm(); } }}>
         <DialogContent className="bg-white max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Labour Assignment' : 'Add Labour to Project'}</DialogTitle>
+            <DialogTitle>{editing ? 'Edit assignment' : 'Add person to project'}</DialogTitle>
             <DialogDescription>
               {form.labour_type === 'In-House'
                 ? 'Select an in-house employee and set their bandwidth allocation for this project.'
@@ -433,9 +433,9 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Labour Type */}
+            {/* Role type */}
             <div className="space-y-2">
-              <Label>Labour Type *</Label>
+              <Label>Role type *</Label>
               <Select
                 value={form.labour_type}
                 onValueChange={(v: 'In-House' | 'Outsourced') =>
@@ -474,7 +474,7 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                   ))}
                   {activeLabour.length === 0 && (
                     <div className="px-3 py-2 text-xs text-slate-400 italic">
-                      No active {form.labour_type === 'In-House' ? 'employees' : 'contractors'} in registry. Add them in the Labour module.
+                      No active {form.labour_type === 'In-House' ? 'employees' : 'contractors'} in the manpower registry. Add them under Manpower first.
                     </div>
                   )}
                 </SelectContent>

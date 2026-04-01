@@ -20,7 +20,7 @@ const ALL_NAV_ITEMS = [
     { label: 'Leaves',     icon: CalendarOff,     href: '/leaves',     roles: ['Admin', 'ProjectManager', 'SiteSupervisor'] },
     { label: 'Reports',    icon: PieChart,        href: '/reports',    roles: ['Admin', 'ProjectManager', 'SiteSupervisor'] },
     { label: 'Inventory',  icon: Layers,          href: '/inventory',  roles: ['Admin'] },
-    { label: 'Labour',     icon: HardHat,         href: '/labour',     roles: ['Admin'] },
+    { label: 'Manpower',   icon: HardHat,         href: '/manpower',   roles: ['Admin'] },
 ];
 
 export function Sidebar() {

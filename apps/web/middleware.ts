@@ -2,6 +2,13 @@ import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
+    // Legacy path: /labour → /manpower
+    if (request.nextUrl.pathname === '/labour' || request.nextUrl.pathname.startsWith('/labour/')) {
+        const url = request.nextUrl.clone()
+        url.pathname = url.pathname.replace(/^\/labour/, '/manpower')
+        return NextResponse.redirect(url)
+    }
+
     let response = NextResponse.next({
         request: {
             headers: request.headers,
@@ -73,7 +80,7 @@ export async function middleware(request: NextRequest) {
     const protectedPaths = [
         '/projects', '/dashboard', '/settings', '/schedule', '/tasks',
         '/team', '/reports', '/inventory', '/leads', '/store', '/materials',
-        '/movement-logs', '/leaves', '/labour',
+        '/movement-logs', '/leaves', '/manpower',
     ];
     const isProtectedPath = protectedPaths.some(path => request.nextUrl.pathname.startsWith(path));
 
@@ -86,7 +93,7 @@ export async function middleware(request: NextRequest) {
     const needsRoleCheck =
         request.nextUrl.pathname.startsWith('/leaves') ||
         request.nextUrl.pathname.startsWith('/inventory') ||
-        request.nextUrl.pathname.startsWith('/labour');
+        request.nextUrl.pathname.startsWith('/manpower');
 
     if (user && needsRoleCheck) {
         const { data: profile } = await supabase
@@ -111,8 +118,8 @@ export async function middleware(request: NextRequest) {
             }
         }
 
-        // /labour — Admin only
-        if (request.nextUrl.pathname.startsWith('/labour')) {
+        // /manpower — Admin only
+        if (request.nextUrl.pathname.startsWith('/manpower')) {
             if (userRole !== 'Admin') {
                 return NextResponse.redirect(new URL('/projects', request.url));
             }

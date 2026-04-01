@@ -498,7 +498,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                   <div className="flex items-center gap-3">
                     <Users className="h-10 w-10 text-purple-500" />
                     <div>
-                      <div className="text-xs text-slate-600 mb-1">Labour Costs</div>
+                      <div className="text-xs text-slate-600 mb-1">Manpower costs</div>
                       <div className="text-xl font-bold text-purple-700">
                         {fmt(totalLaborCost)}
                       </div>
@@ -540,7 +540,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
         <CardContent>
           {manpowerRows.length === 0 ? (
             <div className="py-8 text-center text-muted-foreground text-sm">
-              No labour assigned to this project yet. Add labour from the Manpower tab.
+              No manpower assigned to this project yet. Add people from the Manpower tab.
             </div>
           ) : (
             <div className="space-y-4">
@@ -635,13 +635,13 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
               {/* Total labour summary bar */}
               <div className="mt-3 p-3 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-between">
-                <div className="text-sm font-medium text-purple-800">Total Labour Cost (In-House + Outsourced)</div>
+                <div className="text-sm font-medium text-purple-800">Total manpower cost (in-house + outsourced)</div>
                 <div className="text-lg font-bold text-purple-700">{fmt(clientTotalLabour)}</div>
               </div>
               {clientTotalLabour > 0 && costSummary?.budgeted_total && costSummary.budgeted_total > 0 && (
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Labour as % of budget</span>
+                    <span>Manpower as % of budget</span>
                     <span>{((clientTotalLabour / costSummary.budgeted_total) * 100).toFixed(1)}%</span>
                   </div>
                   <Progress value={Math.min((clientTotalLabour / costSummary.budgeted_total) * 100, 100)} className="h-1.5" />
@@ -669,7 +669,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
               <DialogContent className="bg-white max-w-xl">
                 <DialogHeader>
                   <DialogTitle>{editingBudget ? 'Edit Budget Entry' : 'Add Budget Entry'}</DialogTitle>
-                  <DialogDescription>Set planned budget by category (material, labour, equipment, overhead, etc.)</DialogDescription>
+                  <DialogDescription>Set planned budget by category (material, manpower, equipment, overhead, etc.)</DialogDescription>
                 </DialogHeader>
 
                 <div className="space-y-4 py-2">
@@ -991,7 +991,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium">Labor Costs (In-House + Outsourced)</span>
+                    <span className="text-sm font-medium">Manpower costs (in-house + outsourced)</span>
                     <span className="text-sm font-semibold">₹{totalLaborCost.toLocaleString('en-IN')}</span>
                   </div>
                   <div className="w-full bg-slate-200 rounded-full h-2">
@@ -1088,11 +1088,11 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
               <div className="font-semibold mb-2">How Dynamic Costing Works:</div>
               <ul className="space-y-1 list-disc list-inside">
                 <li><strong>Material Costs</strong>: From stock used (cost per unit) when set; otherwise from outward movements</li>
-                <li><strong>In-House Labour</strong>: (Monthly Salary ÷ 24) × Bandwidth % × Working Days — from the Manpower tab</li>
-                <li><strong>Outsourced Labour</strong>: Daily Wage × Working Days + Incentive — from the Manpower tab</li>
+                <li><strong>In-house</strong>: (Monthly Salary ÷ 24) × Bandwidth % × Working Days — from the Manpower tab</li>
+                <li><strong>Outsourced</strong>: Daily Wage × Working Days + Incentive — from the Manpower tab</li>
                 <li><strong>Budget Entries</strong>: Planned amounts by category — used for variance vs actual</li>
                 <li><strong>Project Expenses</strong>: Actual travel, food, and other spend recorded below — plus debit transactions — count toward total cost</li>
-                <li><strong>Profit/Loss</strong>: Income (credit transactions) minus material, labour, and other expenses</li>
+                <li><strong>Profit/Loss</strong>: Income (credit transactions) minus material, manpower, and other expenses</li>
               </ul>
             </div>
           </div>

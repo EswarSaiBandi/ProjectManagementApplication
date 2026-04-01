@@ -12,9 +12,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, UserCheck, Building2, Users, ToggleLeft, ToggleRight, HardHat } from 'lucide-react';
+import { Plus, Pencil, UserCheck, Building2, Users, ToggleLeft, ToggleRight, HardHat, ClipboardList } from 'lucide-react';
+import ManpowerPayslipsPanel from '@/components/manpower/ManpowerPayslipsPanel';
 
-type LabourEntry = {
+type RegistryEntry = {
   id: number;
   name: string;
   labour_type: 'In-House' | 'Outsourced';
@@ -35,12 +36,13 @@ const EMPTY_FORM = {
   notes: '',
 };
 
-export default function LabourPage() {
-  const [entries, setEntries] = useState<LabourEntry[]>([]);
+export default function ManpowerPage() {
+  const [entries, setEntries] = useState<RegistryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [editing, setEditing] = useState<LabourEntry | null>(null);
+  const [editing, setEditing] = useState<RegistryEntry | null>(null);
+  const [mainTab, setMainTab] = useState<'registry' | 'payslips'>('registry');
   const [activeTab, setActiveTab] = useState<'in-house' | 'outsourced'>('in-house');
   const [form, setForm] = useState(EMPTY_FORM);
 
@@ -51,7 +53,7 @@ export default function LabourPage() {
       .select('*')
       .order('name');
     if (error) { toast.error('Failed to load: ' + error.message); }
-    else { setEntries((data || []) as LabourEntry[]); }
+    else { setEntries((data || []) as RegistryEntry[]); }
     setLoading(false);
   };
 
@@ -74,7 +76,7 @@ export default function LabourPage() {
     setIsOpen(true);
   };
 
-  const openEdit = (e: LabourEntry) => {
+  const openEdit = (e: RegistryEntry) => {
     setEditing(e);
     setForm({
       name:           e.name,
@@ -91,7 +93,7 @@ export default function LabourPage() {
     if (isSaving) return;
     if (!form.name.trim()) { toast.error('Name is required'); return; }
     if (form.labour_type === 'In-House') {
-      if (!form.monthly_salary.trim()) { toast.error('Monthly salary is required for In-House employees'); return; }
+      if (!form.monthly_salary.trim()) { toast.error('Monthly salary is required for in-house employees'); return; }
       const sal = Number(form.monthly_salary);
       if (!Number.isFinite(sal) || sal <= 0) { toast.error('Monthly salary must be a positive number'); return; }
     }
@@ -99,7 +101,7 @@ export default function LabourPage() {
     setIsSaving(true);
     const { data: ud } = await supabase.auth.getUser();
 
-    const payload: any = {
+    const payload: Record<string, unknown> = {
       name:           form.name.trim(),
       labour_type:    form.labour_type,
       designation:    form.designation.trim() || null,
@@ -126,7 +128,7 @@ export default function LabourPage() {
     setIsSaving(false);
   };
 
-  const toggleActive = async (e: LabourEntry) => {
+  const toggleActive = async (e: RegistryEntry) => {
     const { error } = await supabase
       .from('labour_master')
       .update({ is_active: !e.is_active })
@@ -136,10 +138,10 @@ export default function LabourPage() {
     setEntries(prev => prev.map(r => r.id === e.id ? { ...r, is_active: !r.is_active } : r));
   };
 
-  const LabourTable = ({ rows }: { rows: LabourEntry[] }) => (
+  const RegistryTable = ({ rows }: { rows: RegistryEntry[] }) => (
     rows.length === 0 ? (
       <div className="py-12 text-center text-muted-foreground text-sm">
-        No entries yet. Click &ldquo;Add Labour&rdquo; to get started.
+        No entries yet. Click &ldquo;Add to registry&rdquo; to get started.
       </div>
     ) : (
       <Table>
@@ -196,22 +198,39 @@ export default function LabourPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight">Labour Registry</h2>
-          <p className="text-muted-foreground mt-1">Manage in-house employees and outsourced contractors</p>
+          <h2 className="text-3xl font-bold tracking-tight">Manpower</h2>
+          <p className="text-muted-foreground mt-1">
+            Manpower registry, project assignments, payslip-style statements, and manpower-related overhead
+          </p>
         </div>
-        <Button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white">
-          <Plus className="h-4 w-4 mr-2" /> Add Labour
-        </Button>
+        {mainTab === 'registry' && (
+          <Button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white shrink-0">
+            <Plus className="h-4 w-4 mr-2" /> Add to registry
+          </Button>
+        )}
       </div>
 
-      {/* Stats */}
+      <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as 'registry' | 'payslips')}>
+        <TabsList className="grid w-full max-w-md grid-cols-2 mb-2">
+          <TabsTrigger value="registry" className="flex items-center gap-2">
+            <Users className="h-4 w-4" /> Registry
+          </TabsTrigger>
+          <TabsTrigger value="payslips" className="flex items-center gap-2">
+            <ClipboardList className="h-4 w-4" /> Work &amp; payslips
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="payslips" className="mt-0">
+          <ManpowerPayslipsPanel />
+        </TabsContent>
+
+        <TabsContent value="registry" className="space-y-6 mt-0">
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="border-l-4 border-l-blue-500">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Total Registered</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Total registered</CardTitle>
             <Users className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
@@ -221,7 +240,7 @@ export default function LabourPage() {
         </Card>
         <Card className="border-l-4 border-l-green-500">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">In-House (Active)</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">In-house (active)</CardTitle>
             <UserCheck className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
@@ -231,7 +250,7 @@ export default function LabourPage() {
         </Card>
         <Card className="border-l-4 border-l-amber-500">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Outsourced (Active)</CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Outsourced (active)</CardTitle>
             <Building2 className="h-4 w-4 text-amber-500" />
           </CardHeader>
           <CardContent>
@@ -241,7 +260,6 @@ export default function LabourPage() {
         </Card>
       </div>
 
-      {/* Table */}
       <Card>
         <CardContent className="pt-4">
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'in-house' | 'outsourced')}>
@@ -254,41 +272,42 @@ export default function LabourPage() {
               </TabsTrigger>
             </TabsList>
             <TabsContent value="in-house">
-              {loading ? <div className="py-8 text-center text-muted-foreground">Loading...</div> : <LabourTable rows={inHouse} />}
+              {loading ? <div className="py-8 text-center text-muted-foreground">Loading...</div> : <RegistryTable rows={inHouse} />}
             </TabsContent>
             <TabsContent value="outsourced">
-              {loading ? <div className="py-8 text-center text-muted-foreground">Loading...</div> : <LabourTable rows={outsourced} />}
+              {loading ? <div className="py-8 text-center text-muted-foreground">Loading...</div> : <RegistryTable rows={outsourced} />}
             </TabsContent>
           </Tabs>
         </CardContent>
       </Card>
+        </TabsContent>
+      </Tabs>
 
-      {/* Add / Edit Dialog */}
       <Dialog open={isOpen} onOpenChange={(o) => { setIsOpen(o); if (!o) { setEditing(null); resetForm(); } }}>
         <DialogContent className="bg-white max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <HardHat className="h-5 w-5" />
-              {editing ? 'Edit Labour Entry' : 'Add Labour Entry'}
+              {editing ? 'Edit registry entry' : 'Add to manpower registry'}
             </DialogTitle>
             <DialogDescription>
               {form.labour_type === 'In-House'
-                ? 'In-House employees have a fixed monthly salary. Bandwidth allocation is set per project.'
-                : 'Outsourced contractors have no fixed salary. Daily wage is entered per project assignment.'}
+                ? 'In-house employees have a fixed monthly salary. Bandwidth allocation is set per project in the Manpower tab.'
+                : 'Outsourced contractors have no fixed salary here. Daily wage is entered per project assignment.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div className="space-y-2">
-              <Label>Labour Type *</Label>
+              <Label>Role type *</Label>
               <Select
                 value={form.labour_type}
                 onValueChange={(v: 'In-House' | 'Outsourced') => setForm({ ...form, labour_type: v, monthly_salary: '' })}
               >
                 <SelectTrigger className="bg-white"><SelectValue /></SelectTrigger>
                 <SelectContent className="bg-white">
-                  <SelectItem value="In-House">In-House (Employee)</SelectItem>
-                  <SelectItem value="Outsourced">Outsourced (Contractor)</SelectItem>
+                  <SelectItem value="In-House">In-house (employee)</SelectItem>
+                  <SelectItem value="Outsourced">Outsourced (contractor)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
