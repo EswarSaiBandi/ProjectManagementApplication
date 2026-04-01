@@ -564,7 +564,7 @@ export default function ManpowerPayslipsPanel() {
           <p className="text-sm text-muted-foreground">
             Choose a person to see their full payment history, balance, and statement. Estimated cost follows project costing rules (in-house: salary ÷ 24 × bandwidth × days; outsourced: daily wage × days + incentive).{' '}
             <span className="text-slate-700">
-              Outsourced staff are typically paid weekly; monthly (in-house) salary is settled on the <strong>31st</strong> of the month.
+              Outsourced staff are typically paid weekly; employee (monthly) salary is paid on the <strong>5th</strong> of every month.
             </span>
           </p>
         </CardHeader>
