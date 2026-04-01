@@ -20,6 +20,7 @@ type StockUsedItem = {
   material_name: string;
   variant_name: string;
   quantity_used: number;
+  cost_per_unit: number | null;
   quantity_per_unit: number;
   metric: string;
   used_date: string;
@@ -64,12 +65,14 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
     material_id: '',
     variant_id: '',
     units_used: '',
+    cost_per_unit: '',
     notes: '',
     used_date: new Date().toISOString().split('T')[0]
   });
 
   const [editForm, setEditForm] = useState({
     units_used: '',
+    cost_per_unit: '',
     notes: '',
     used_date: ''
   });
@@ -104,6 +107,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
         material_name: item.material_variants?.materials_master?.material_name || 'Unknown',
         variant_name: item.material_variants?.variant_name || 'Unknown',
         quantity_used: item.quantity_used,
+        cost_per_unit: item.cost_per_unit ?? 0,
         quantity_per_unit: item.material_variants?.quantity_per_unit ?? 1,
         metric: item.material_variants?.materials_master?.metric || '',
         used_date: item.used_date,
@@ -169,6 +173,17 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
     return inv ? inv.available_units : 0;
   };
 
+  const getFreshInventoryRow = async (variantId: number) => {
+    const { data, error } = await supabase
+      .from('project_inventory')
+      .select('used_units, available_units')
+      .eq('project_id', parseInt(projectId))
+      .eq('variant_id', variantId)
+      .single();
+    if (error || !data) throw new Error('Unable to fetch latest project inventory');
+    return data;
+  };
+
   const handleMaterialChange = (materialId: string) => {
     setForm({ ...form, material_id: materialId, variant_id: '', units_used: '' });
     setSelectedVariant(null);
@@ -201,6 +216,12 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
     );
   };
 
+  const notifyMovementUpdated = () => {
+    window.dispatchEvent(
+      new CustomEvent('material-movements-updated', { detail: { projectId } })
+    );
+  };
+
   const adjustInventory = async (
     variantId: number,
     deltaUnits: number  // positive = more used, negative = restoring
@@ -215,26 +236,28 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
 
     if (fetchErr || !fresh) {
       console.error('adjustInventory: row not found for variant', variantId, fetchErr);
-      return;
+      throw new Error('Project inventory row not found for selected variant');
     }
 
     const newUsed      = Number(fresh.used_units)      + deltaUnits;
     const newAvailable = Number(fresh.available_units) - deltaUnits;
+    if (newUsed < -0.0001 || newAvailable < -0.0001) {
+      throw new Error('Inventory update would result in negative units');
+    }
 
     const { error } = await supabase
       .from('project_inventory')
       .update({
         used_units:      newUsed,
-        available_units: newAvailable,
       })
       .eq('project_id', parseInt(projectId))
       .eq('variant_id', variantId);
 
     if (error) {
       console.error('Inventory sync error:', error);
-    } else {
-      notifyInventoryUpdated();
+      throw error;
     }
+    notifyInventoryUpdated();
   };
 
   const logMovement = async (
@@ -257,7 +280,11 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
       notes,
       created_by: userId,
     });
-    if (error) console.error('Movement log error:', error);
+    if (error) {
+      console.error('Movement log error:', error);
+      throw error;
+    }
+    notifyMovementUpdated();
   };
 
   // ─── Insert ───────────────────────────────────────────────────────────────────
@@ -274,14 +301,20 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
         toast.error('Please enter valid number of units');
         return;
       }
+      const costPerUnit = parseFloat(form.cost_per_unit);
+      if (isNaN(costPerUnit) || costPerUnit < 0) {
+        toast.error('Please enter valid cost per unit');
+        return;
+      }
 
       if (!selectedVariant) {
         toast.error('Please select a variant');
         return;
       }
 
-      const available = getAvailableUnits(selectedVariant.variant_id);
-      if (units > available) {
+      const fresh = await getFreshInventoryRow(selectedVariant.variant_id);
+      const available = Number(fresh.available_units);
+      if (units > available + 0.0001) {
         toast.error(`Only ${available.toFixed(2)} units available. You are trying to use ${units} units.`);
         return;
       }
@@ -292,30 +325,19 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
       const { data: userData } = await supabase.auth.getUser();
       const userId = userData.user?.id || null;
 
-      const { error } = await supabase.from('project_stock_used').insert({
+      const { data: inserted, error } = await supabase.from('project_stock_used').insert({
         project_id: parseInt(projectId),
         variant_id: parseInt(form.variant_id),
         quantity_used: calculatedQuantity,
+        cost_per_unit: costPerUnit,
         used_date: form.used_date,
         notes: form.notes.trim() || null,
         recorded_by: userId,
-      });
+      }).select('id').single();
 
-      if (error) throw error;
-
-      // Sync project inventory
-      await adjustInventory(selectedVariant.variant_id, units);
-
-      // Log the outward movement
-      await logMovement(
-        selectedVariant.material_id,
-        selectedVariant.variant_id,
-        'Project Out',
-        calculatedQuantity,
-        units,
-        `Stock usage recorded: ${units} units = ${calculatedQuantity.toFixed(2)} ${matName?.metric ?? ''}${form.notes ? ' | ' + form.notes : ''}`,
-        userId
-      );
+      if (error) {
+        throw error;
+      }
 
       toast.success(`Stock usage recorded: ${units} units = ${calculatedQuantity.toFixed(2)} ${matName?.metric ?? ''}`);
       setIsDialogOpen(false);
@@ -337,6 +359,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
       : item.quantity_used;
     setEditForm({
       units_used: currentUnits.toString(),
+      cost_per_unit: (item.cost_per_unit ?? 0).toString(),
       notes: item.notes || '',
       used_date: item.used_date,
     });
@@ -351,6 +374,11 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
         toast.error('Please enter valid number of units');
         return;
       }
+      const costPerUnit = parseFloat(editForm.cost_per_unit);
+      if (isNaN(costPerUnit) || costPerUnit < 0) {
+        toast.error('Please enter valid cost per unit');
+        return;
+      }
 
       const oldUnits = editing.quantity_per_unit > 0
         ? editing.quantity_used / editing.quantity_per_unit
@@ -358,10 +386,11 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
 
       const deltaUnits = newUnits - oldUnits;
 
-      // Check inventory constraint only if increasing usage
+      // Fresh inventory cross-check before saving (prevents stale UI race)
       if (deltaUnits > 0) {
-        const available = getAvailableUnits(editing.variant_id);
-        if (deltaUnits > available) {
+        const fresh = await getFreshInventoryRow(editing.variant_id);
+        const available = Number(fresh.available_units);
+        if (deltaUnits > available + 0.0001) {
           toast.error(`Only ${available.toFixed(2)} additional units available in project inventory.`);
           return;
         }
@@ -372,22 +401,30 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
       const { data: userData } = await supabase.auth.getUser();
       const userId = userData.user?.id || null;
 
+      if (Math.abs(deltaUnits) > 0.0001) {
+        await adjustInventory(editing.variant_id, deltaUnits);
+      }
+
       // Update the stock used record
       const { error } = await supabase
         .from('project_stock_used')
         .update({
           quantity_used: newQuantityMetric,
+          cost_per_unit: costPerUnit,
           used_date: editForm.used_date,
           notes: editForm.notes.trim() || null,
         })
         .eq('id', editing.id);
 
-      if (error) throw error;
+      if (error) {
+        if (Math.abs(deltaUnits) > 0.0001) {
+          await adjustInventory(editing.variant_id, -deltaUnits);
+        }
+        throw error;
+      }
 
-      // Sync project inventory if quantity changed
+      // Log movement if quantity changed
       if (Math.abs(deltaUnits) > 0.0001) {
-        await adjustInventory(editing.variant_id, deltaUnits);
-
         const deltaQty = newQuantityMetric - editing.quantity_used;
         await logMovement(
           editing.material_id,
@@ -420,19 +457,21 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
       const { data: userData } = await supabase.auth.getUser();
       const userId = userData.user?.id || null;
 
-      const { error } = await supabase
-        .from('project_stock_used')
-        .delete()
-        .eq('id', item.id);
-
-      if (error) throw error;
-
-      // Restore inventory (reverse the usage)
       const unitsToRestore = item.quantity_per_unit > 0
         ? item.quantity_used / item.quantity_per_unit
         : item.quantity_used;
 
       await adjustInventory(item.variant_id, -unitsToRestore);
+
+      const { error } = await supabase
+        .from('project_stock_used')
+        .delete()
+        .eq('id', item.id);
+
+      if (error) {
+        await adjustInventory(item.variant_id, unitsToRestore);
+        throw error;
+      }
 
       // Log the reversal as inward movement
       await logMovement(
@@ -459,6 +498,7 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
       material_id: '',
       variant_id: '',
       units_used: '',
+      cost_per_unit: '',
       notes: '',
       used_date: new Date().toISOString().split('T')[0]
     });
@@ -568,6 +608,19 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                   </div>
 
                   <div className="space-y-2">
+                    <Label>Cost Per Unit *</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.cost_per_unit}
+                      onChange={(e) => setForm({ ...form, cost_per_unit: e.target.value })}
+                      placeholder="e.g., 250.00"
+                      className="bg-white"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
                     <Label>Date Used *</Label>
                     <Input
                       type="date"
@@ -638,6 +691,8 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                     <TableHead>Variant</TableHead>
                     <TableHead className="text-center w-[90px]">Units Used</TableHead>
                     <TableHead className="text-center">Qty Used</TableHead>
+                    <TableHead className="text-right">Cost/Unit</TableHead>
+                    <TableHead className="text-right">Total Cost</TableHead>
                     <TableHead>Date Used</TableHead>
                     <TableHead>Notes</TableHead>
                     <TableHead className="text-center w-[90px]">Actions</TableHead>
@@ -659,6 +714,12 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                       </TableCell>
                       <TableCell className="text-center">
                         <Badge variant="secondary">{item.quantity_used} {item.metric}</Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        ₹{Number(item.cost_per_unit ?? 0).toFixed(2)}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        ₹{(unitsUsed * Number(item.cost_per_unit ?? 0)).toFixed(2)}
                       </TableCell>
                       <TableCell className="text-sm text-slate-600">
                         {new Date(item.used_date).toLocaleDateString()}
@@ -742,6 +803,18 @@ export default function StockUsedTab({ projectId }: { projectId: string }) {
                     </>
                   );
                 })()}
+              </div>
+
+              <div className="space-y-2">
+                <Label>Cost Per Unit *</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editForm.cost_per_unit}
+                  onChange={(e) => setEditForm({ ...editForm, cost_per_unit: e.target.value })}
+                  className="bg-white"
+                />
               </div>
 
               <div className="space-y-2">

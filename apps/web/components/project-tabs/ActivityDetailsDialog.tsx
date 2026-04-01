@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -20,6 +20,11 @@ type ActivityLog = {
     comment: string;
     user_name: string;
     created_at: string;
+    audio_path?: string | null;
+    file_path?: string | null;
+    file_name?: string | null;
+    audio_url?: string | null;
+    file_url?: string | null;
 };
 
 interface ActivityDetailsDialogProps {
@@ -35,8 +40,15 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
     const [logs, setLogs] = useState<ActivityLog[]>([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
+    const [recordingSeconds, setRecordingSeconds] = useState(0);
 
     const [currentUserName, setCurrentUserName] = useState("Unknown");
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const recordingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         const fetchUser = async () => {
@@ -54,9 +66,21 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
         if (activity) {
             setProgress(activity.progress || 0);
             setComment("");
+            setSelectedFile(null);
+            setRecordedAudioBlob(null);
+            setRecordingSeconds(0);
             fetchLogs(activity.activity_id);
         }
     }, [activity]);
+
+    useEffect(() => {
+        return () => {
+            if (recordingIntervalRef.current) clearInterval(recordingIntervalRef.current);
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+                mediaRecorderRef.current.stop();
+            }
+        };
+    }, []);
 
     const fetchLogs = async (activityId: number) => {
         setIsLoading(true);
@@ -70,9 +94,74 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
             console.error("Error fetching logs:", error);
             toast.error("Failed to load history.");
         } else {
-            setLogs(data || []);
+            const withUrls = await Promise.all(
+                ((data || []) as ActivityLog[]).map(async (log) => {
+                    let audio_url: string | null = null;
+                    let file_url: string | null = null;
+
+                    if (log.audio_path) {
+                        const { data: audioData } = await supabase.storage.from('documents').createSignedUrl(log.audio_path, 60 * 30);
+                        audio_url = audioData?.signedUrl || null;
+                    }
+                    if (log.file_path) {
+                        const { data: fileData } = await supabase.storage.from('documents').createSignedUrl(log.file_path, 60 * 30);
+                        file_url = fileData?.signedUrl || null;
+                    }
+
+                    return { ...log, audio_url, file_url };
+                })
+            );
+            setLogs(withUrls);
         }
         setIsLoading(false);
+    };
+
+    const formatDuration = (seconds: number) => {
+        const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+        const secs = (seconds % 60).toString().padStart(2, '0');
+        return `${mins}:${secs}`;
+    };
+
+    const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] || null;
+        setSelectedFile(file);
+    };
+
+    const handleToggleRecording = async () => {
+        if (isRecording) {
+            mediaRecorderRef.current?.stop();
+            setIsRecording(false);
+            if (recordingIntervalRef.current) {
+                clearInterval(recordingIntervalRef.current);
+                recordingIntervalRef.current = null;
+            }
+            return;
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const recorder = new MediaRecorder(stream);
+            const chunks: BlobPart[] = [];
+            recorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) chunks.push(event.data);
+            };
+            recorder.onstop = () => {
+                const blob = new Blob(chunks, { type: 'audio/webm' });
+                setRecordedAudioBlob(blob);
+                stream.getTracks().forEach((track) => track.stop());
+            };
+            recorder.start();
+            mediaRecorderRef.current = recorder;
+            setIsRecording(true);
+            setRecordingSeconds(0);
+            recordingIntervalRef.current = setInterval(() => {
+                setRecordingSeconds((prev) => prev + 1);
+            }, 1000);
+        } catch (err: any) {
+            toast.error(err?.message || "Microphone access denied");
+        }
     };
 
     const handleSubmit = async () => {
@@ -92,6 +181,25 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
 
             if (updateError) throw updateError;
 
+            let uploadedAudioPath: string | null = null;
+            let uploadedFilePath: string | null = null;
+            if (recordedAudioBlob) {
+                const audioPath = `projects/${activity.activity_id}/activity-logs/${Date.now()}-voice.webm`;
+                const { error: audioUploadError } = await supabase.storage
+                    .from('documents')
+                    .upload(audioPath, recordedAudioBlob, { contentType: 'audio/webm' });
+                if (audioUploadError) throw audioUploadError;
+                uploadedAudioPath = audioPath;
+            }
+            if (selectedFile) {
+                const filePath = `projects/${activity.activity_id}/activity-logs/${Date.now()}-${safeFileName(selectedFile.name)}`;
+                const { error: fileUploadError } = await supabase.storage
+                    .from('documents')
+                    .upload(filePath, selectedFile, { contentType: selectedFile.type || undefined });
+                if (fileUploadError) throw fileUploadError;
+                uploadedFilePath = filePath;
+            }
+
             // 2. Insert into activity_logs
             const { error: logError } = await supabase
                 .from('activity_logs')
@@ -100,13 +208,19 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
                     previous_progress: activity.progress,
                     new_progress: progress,
                     comment: comment,
-                    user_name: currentUserName
+                    user_name: currentUserName,
+                    audio_path: uploadedAudioPath,
+                    file_path: uploadedFilePath,
+                    file_name: selectedFile?.name || null
                 });
 
             if (logError) throw logError;
 
             toast.success("Activity updated successfully!");
             setComment("");
+            setSelectedFile(null);
+            setRecordedAudioBlob(null);
+            setRecordingSeconds(0);
             onUpdate(); // Refresh parent
             fetchLogs(activity.activity_id); // Refresh local history
 
@@ -122,7 +236,7 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
 
     return (
         <Dialog open={isOpen} onOpenChange={(open: boolean) => !open && onClose()}>
-            <DialogContent className="max-w-4xl p-0 gap-0 bg-slate-50 overflow-hidden h-[600px] flex flex-col">
+            <DialogContent className="max-w-4xl w-[95vw] p-0 gap-0 bg-slate-50 overflow-y-auto md:overflow-hidden h-[85vh] sm:h-[600px] flex flex-col">
                 {/* Header */}
                 <div className="px-6 py-4 border-b border-gray-200 bg-white flex justify-between items-center">
                     <div>
@@ -131,9 +245,9 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
                     </div>
                 </div>
 
-                <div className="flex flex-1 overflow-hidden">
+                <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
                     {/* Left Column: Update Form */}
-                    <div className="w-1/2 p-6 bg-white border-r border-gray-200 overflow-y-auto">
+                    <div className="w-full md:w-1/2 p-4 sm:p-6 bg-white md:border-r border-gray-200 overflow-y-auto md:min-h-0">
                         <div className="mb-6">
                             <h3 className="text-sm font-bold text-slate-800 mb-4 flex items-center gap-2">
                                 <span className="text-blue-600">🛠️</span> Update Status
@@ -180,21 +294,52 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
                                     onChange={(e) => setComment(e.target.value)}
                                 />
                                 <div className="absolute right-3 bottom-3 flex items-center gap-2">
-                                    <span className="text-xs text-slate-400">00:00</span>
-                                    <Button size="icon" className="h-8 w-8 rounded-full bg-purple-600 hover:bg-purple-700 text-white shadow-md">
+                                    <span className="text-xs text-slate-400">{formatDuration(recordingSeconds)}</span>
+                                    <Button
+                                        size="icon"
+                                        type="button"
+                                        onClick={handleToggleRecording}
+                                        className={`h-8 w-8 rounded-full text-white shadow-md ${isRecording ? 'bg-red-600 hover:bg-red-700' : 'bg-purple-600 hover:bg-purple-700'}`}
+                                    >
                                         <Mic className="h-4 w-4" />
                                     </Button>
                                 </div>
                             </div>
 
-                            {/* File Upload Placeholder */}
+                            {/* File Upload */}
                             <div className="mb-8">
                                 <label className="text-sm font-medium text-slate-600 mb-2 block">Select Files</label>
                                 <div className="flex items-center gap-4">
-                                    <span className="text-sm text-gray-400 italic">No files selected</span>
-                                    <Button variant="outline" size="sm" className="text-blue-600 border-blue-200 bg-blue-50 hover:bg-blue-100 gap-2">
+                                    <span className="text-sm text-gray-500 italic">{selectedFile ? selectedFile.name : 'No files selected'}</span>
+                                    <input
+                                        ref={fileInputRef}
+                                        type="file"
+                                        className="hidden"
+                                        onChange={handleFileSelect}
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="text-blue-600 border-blue-200 bg-blue-50 hover:bg-blue-100 gap-2"
+                                    >
                                         <Paperclip className="h-3 w-3" /> Upload
                                     </Button>
+                                    {selectedFile && (
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="sm"
+                                            className="text-red-600 hover:text-red-700"
+                                            onClick={() => {
+                                                setSelectedFile(null);
+                                                if (fileInputRef.current) fileInputRef.current.value = '';
+                                            }}
+                                        >
+                                            Clear
+                                        </Button>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -207,7 +352,7 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
                     </div>
 
                     {/* Right Column: History */}
-                    <div className="w-1/2 bg-slate-50 flex flex-col h-full">
+                    <div className="w-full md:w-1/2 bg-slate-50 flex flex-col max-h-[40vh] md:max-h-none md:h-full border-t md:border-t-0 border-gray-200">
                         <div className="p-4 bg-slate-50 sticky top-0 z-10">
                             <h3 className="text-sm font-bold text-slate-800">Activity History</h3>
                         </div>
@@ -243,16 +388,27 @@ export function ActivityDetailsDialog({ activity, isOpen, onClose, onUpdate }: A
                                         {log.comment && (
                                             <div className="bg-slate-50 rounded-lg p-3 relative">
                                                 <p className="text-sm text-slate-600 mb-1 font-medium">Comments <span className="text-blue-500 text-xs cursor-pointer font-normal">Show</span></p>
-                                                <div className="flex items-center justify-between">
-                                                    <div className="h-8 w-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-400">
-                                                        <Paperclip className="h-4 w-4" />
-                                                    </div>
-                                                    <div className="h-8 w-8 rounded-full bg-purple-600 flex items-center justify-center text-white">
-                                                        <Mic className="h-4 w-4" />
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        {log.file_url && (
+                                                            <a
+                                                                href={log.file_url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="inline-flex items-center text-xs text-blue-600 hover:underline"
+                                                            >
+                                                                <Paperclip className="h-3.5 w-3.5 mr-1" />
+                                                                {log.file_name || 'Attachment'}
+                                                            </a>
+                                                        )}
+                                                        {log.audio_url && (
+                                                            <audio controls className="h-8">
+                                                                <source src={log.audio_url} type="audio/webm" />
+                                                            </audio>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <p className="text-sm text-slate-700 mt-2">{log.comment}</p>
-                                                <span className="absolute bottom-2 right-2 text-xs text-slate-400">00:00</span>
                                             </div>
                                         )}
                                     </div>

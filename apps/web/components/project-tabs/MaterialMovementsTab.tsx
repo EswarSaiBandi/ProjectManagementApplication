@@ -80,6 +80,15 @@ export default function MaterialMovementsTab({ projectId }: { projectId: string 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numericProjectId]);
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId: string }>).detail;
+      if (detail?.projectId === projectId) fetchMovements();
+    };
+    window.addEventListener('material-movements-updated', handler);
+    return () => window.removeEventListener('material-movements-updated', handler);
+  }, [projectId]);
+
   const filteredMovements = movements.filter(m => {
     const matchesSearch = (m.material_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                           (m.variant_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||

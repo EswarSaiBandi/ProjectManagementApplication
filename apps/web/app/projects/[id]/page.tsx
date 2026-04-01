@@ -112,13 +112,13 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
     return (
         <div className="space-y-6">
             {/* Header */}
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-3">
-                        <h1 className="text-3xl font-bold tracking-tight">{project.name}</h1>
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight break-words">{project.name}</h1>
                         <Badge variant="secondary" className="text-sm px-3 py-1 bg-gray-200 text-gray-700">{project.code}</Badge>
                     </div>
-                    <div className="flex items-center gap-2 mt-2">
+                    <div className="flex flex-wrap items-center gap-2 mt-2">
                         <span className="text-sm text-gray-500">Status:</span>
                         <Badge variant="success" className="bg-green-100 text-green-700 border-green-200">{project.status}</Badge>
                     </div>
@@ -128,14 +128,14 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
             {/* Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 {/* Wrapping Tab List */}
-                <div className="w-full mb-6">
-                    <TabsList className="w-full flex flex-wrap h-auto gap-4 bg-transparent p-0 justify-start">
+                <div className="w-full mb-6 overflow-x-auto">
+                    <TabsList className="w-max min-w-full flex h-auto gap-2 sm:gap-4 bg-transparent p-0 justify-start">
                         {tabs.map((tab) => (
                             <TabsTrigger
                                 key={tab.value}
                                 value={tab.value}
                                 className={cn(
-                                    "rounded-none border-b-2 border-transparent px-2 py-2 gap-2 data-[state=active]:shadow-none transition-all",
+                                    "rounded-none border-b-2 border-transparent px-2 py-2 gap-1.5 sm:gap-2 data-[state=active]:shadow-none transition-all whitespace-nowrap text-xs sm:text-sm",
                                     tab.special
                                         ? "bg-purple-600 text-white hover:bg-purple-700 rounded-md border-b-0 px-4 py-2 data-[state=active]:bg-purple-700 data-[state=active]:text-white font-semibold"
                                         : "text-gray-500 hover:text-gray-900 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"

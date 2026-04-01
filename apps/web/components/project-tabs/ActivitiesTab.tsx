@@ -32,6 +32,8 @@ type Activity = {
     owner: string;
     progress: number;
     status: string;
+    image_path?: string | null;
+    image_url?: string | null;
 };
 
 const STATUS_OPTIONS = ["Pending", "In Progress", "Completed"] as const;
@@ -127,6 +129,11 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
     // Activity Details & History Modal State
     const [selectedActivityForDetails, setSelectedActivityForDetails] = useState<Activity | null>(null);
     const [isDetailsOpen, setIsDetailsOpen] = useState(false);
+    const [activityImageFile, setActivityImageFile] = useState<File | null>(null);
+    const [activityImagePreview, setActivityImagePreview] = useState<string | null>(null);
+    const [removeActivityImage, setRemoveActivityImage] = useState(false);
+    const [isImageViewerOpen, setIsImageViewerOpen] = useState(false);
+    const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
 
     const formatDate = (dateString: string) => {
         if (!dateString) return "";
@@ -142,7 +149,14 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
             .order('start_date', { ascending: true });
 
         if (activitiesData) {
-            setActivities(activitiesData);
+            const withImages = await Promise.all(
+                (activitiesData as Activity[]).map(async (activity) => {
+                    if (!activity.image_path) return { ...activity, image_url: null };
+                    const { data } = await supabase.storage.from('documents').createSignedUrl(activity.image_path, 60 * 30);
+                    return { ...activity, image_url: data?.signedUrl || null };
+                })
+            );
+            setActivities(withImages);
 
             // Sync selectedActivityForDetails if it's open
             if (selectedActivityForDetails) {
@@ -179,7 +193,22 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
             progress: Number(activity.progress ?? 0),
             status: activity.status || 'Pending'
         });
+        setActivityImageFile(null);
+        setActivityImagePreview(activity.image_url || null);
+        setRemoveActivityImage(false);
         setIsActivityOpen(true);
+    };
+
+    const safeFileName = (name: string) => name.replace(/[^a-zA-Z0-9._-]/g, "_");
+
+    const uploadActivityImage = async () => {
+        if (!activityImageFile) return null;
+        const filePath = `projects/${projectId}/activities/${Date.now()}-${safeFileName(activityImageFile.name)}`;
+        const { error } = await supabase.storage
+            .from('documents')
+            .upload(filePath, activityImageFile, { contentType: activityImageFile.type || undefined });
+        if (error) throw error;
+        return filePath;
     };
 
     const handleSaveActivity = async () => {
@@ -219,6 +248,9 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
             const computedStatus =
                 p === 100 ? "Completed" : (newActivity.status || (p > 0 ? "In Progress" : "Pending"));
 
+            const uploadedImagePath = activityImageFile ? await uploadActivityImage() : undefined;
+            const currentActivity = activities.find((a) => a.activity_id === editingId);
+
             const payload = {
                 project_id: Number(projectId),
                 activity_name: newActivity.activity_name,
@@ -230,6 +262,9 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                 owner: newActivity.owner,
                 progress: p,
                 status: computedStatus,
+                image_path: removeActivityImage
+                    ? null
+                    : (uploadedImagePath !== undefined ? uploadedImagePath : (currentActivity?.image_path || null)),
             };
 
             const { error: updateError } = await supabase
@@ -237,6 +272,10 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                 .update(payload)
                 .eq('activity_id', editingId);
             error = updateError;
+
+            if (!updateError && removeActivityImage && currentActivity?.image_path) {
+                await supabase.storage.from('documents').remove([currentActivity.image_path]);
+            }
 
         } else {
             if (createMode === "custom") {
@@ -265,6 +304,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                 const computedStatus =
                     p === 100 ? "Completed" : (newActivity.status || (p > 0 ? "In Progress" : "Pending"));
 
+                const uploadedImagePath = activityImageFile ? await uploadActivityImage() : null;
                 const payload = {
                     project_id: Number(projectId),
                     activity_name: newActivity.activity_name,
@@ -276,6 +316,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                     owner: newActivity.owner || currentUser,
                     progress: p,
                     status: computedStatus,
+                    image_path: uploadedImagePath,
                 };
 
                 const { error: insertError } = await supabase
@@ -339,6 +380,9 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
             });
             setSelectedActivities([]);
             setSearchTerm("");
+            setActivityImageFile(null);
+            setActivityImagePreview(null);
+            setRemoveActivityImage(false);
             fetchActivities();
         } else {
             console.error("Error saving activity:", error);
@@ -373,7 +417,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
     };
 
     return (
-        <Card className="border-none shadow-sm flex flex-col h-[calc(100vh-200px)]">
+        <Card className="border-none shadow-sm flex flex-col h-auto md:h-[calc(100vh-200px)]">
             <CardHeader className="pb-4 pt-2">
                 <div className="flex justify-between items-center">
                     {/* Left: View Toggle */}
@@ -409,7 +453,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                     {/* Right: Actions */}
                     <div className="flex space-x-2">
                         {/* Only show actions in list mode or specific actions in chart mode if needed */}
-                        <Dialog open={isActivityOpen} onOpenChange={(open: boolean) => { setIsActivityOpen(open); if (!open) { setEditingId(null); setCreateMode("bulk"); setNewActivity({ activity_name: '', description: '', dependencies: '', start_date: '', end_date: '', tag: 'Site Work', owner: currentUser, progress: 0, status: 'Pending' }); setSelectedActivities([]); setSearchTerm(""); } }}>
+                        <Dialog open={isActivityOpen} onOpenChange={(open: boolean) => { setIsActivityOpen(open); if (!open) { setEditingId(null); setCreateMode("bulk"); setNewActivity({ activity_name: '', description: '', dependencies: '', start_date: '', end_date: '', tag: 'Site Work', owner: currentUser, progress: 0, status: 'Pending' }); setSelectedActivities([]); setSearchTerm(""); setActivityImageFile(null); setActivityImagePreview(null); setRemoveActivityImage(false); } }}>
                             {!readOnly && (
                                 <DialogTrigger asChild>
                                     <Button size="sm" className="bg-blue-600 text-white hover:bg-blue-700 h-9" onClick={() => { setEditingId(null); }}>
@@ -417,7 +461,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                                     </Button>
                                 </DialogTrigger>
                             )}
-                            <DialogContent className="max-w-2xl bg-white rounded-xl shadow-2xl border-0">
+                            <DialogContent className="max-w-2xl w-[95vw] max-h-[85vh] overflow-y-auto bg-white rounded-xl shadow-2xl border-0">
                                 <DialogHeader>
                                     <DialogTitle className="text-xl font-bold">{editingId ? 'Edit Activity' : 'Add New Activity'}</DialogTitle>
                                     <DialogDescription>
@@ -523,6 +567,40 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                                                 </SelectContent>
                                             </Select>
                                         </div>
+                                        <div className="grid grid-cols-4 items-start gap-4">
+                                            <Label className="text-right text-slate-700 pt-2">Image</Label>
+                                            <div className="col-span-3 space-y-2">
+                                                <Input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    className="bg-white text-slate-900 border-slate-300"
+                                                    onChange={(e) => {
+                                                        const file = e.target.files?.[0] || null;
+                                                        setActivityImageFile(file);
+                                                                setRemoveActivityImage(false);
+                                                        setActivityImagePreview(file ? URL.createObjectURL(file) : (activityImagePreview || null));
+                                                    }}
+                                                />
+                                                {activityImagePreview && (
+                                                            <div className="space-y-2">
+                                                                <img src={activityImagePreview} alt="Activity preview" className="h-24 w-24 rounded-md object-cover border" />
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8"
+                                                                    onClick={() => {
+                                                                        setActivityImageFile(null);
+                                                                        setActivityImagePreview(null);
+                                                                        setRemoveActivityImage(true);
+                                                                    }}
+                                                                >
+                                                                    Remove Image
+                                                                </Button>
+                                                            </div>
+                                                )}
+                                            </div>
+                                        </div>
                                     </div>
                                 ) : (
                                     // Create Mode (Bulk or Custom)
@@ -609,6 +687,40 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                                                         onChange={(e) => setNewActivity({ ...newActivity, owner: e.target.value })}
                                                         placeholder="e.g. Site Supervisor"
                                                     />
+                                                </div>
+                                                <div className="grid grid-cols-4 items-start gap-4">
+                                                    <Label className="text-right text-slate-700 pt-2">Image</Label>
+                                                    <div className="col-span-3 space-y-2">
+                                                        <Input
+                                                            type="file"
+                                                            accept="image/*"
+                                                            className="bg-white text-slate-900 border-slate-300"
+                                                            onChange={(e) => {
+                                                                const file = e.target.files?.[0] || null;
+                                                                setActivityImageFile(file);
+                                                                setRemoveActivityImage(false);
+                                                                setActivityImagePreview(file ? URL.createObjectURL(file) : null);
+                                                            }}
+                                                        />
+                                                        {activityImagePreview && (
+                                                            <div className="space-y-2">
+                                                                <img src={activityImagePreview} alt="Activity preview" className="h-24 w-24 rounded-md object-cover border" />
+                                                                <Button
+                                                                    type="button"
+                                                                    variant="outline"
+                                                                    size="sm"
+                                                                    className="h-8"
+                                                                    onClick={() => {
+                                                                        setActivityImageFile(null);
+                                                                        setActivityImagePreview(null);
+                                                                        setRemoveActivityImage(false);
+                                                                    }}
+                                                                >
+                                                                    Remove Image
+                                                                </Button>
+                                                            </div>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             </div>
                                         ) : (
@@ -728,7 +840,8 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
 
             <CardContent className="flex-1 overflow-hidden p-0 relative">
                 {viewMode === 'list' ? (
-                    <div className="h-full overflow-auto px-6 pb-6">
+                    <div className="h-full overflow-auto px-4 md:px-6 pb-6">
+                        <div className="hidden md:block">
                         <Table>
                             <TableHeader className="bg-slate-50 sticky top-0 z-10">
                                 <TableRow className="hover:bg-transparent border-b border-slate-200">
@@ -738,6 +851,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Tag</TableHead>
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Owner</TableHead>
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Current Status</TableHead>
+                                    <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Image</TableHead>
                                     <TableHead className="font-semibold text-slate-500 text-xs uppercase tracking-wider">Comment</TableHead>
                                     <TableHead className="text-xs font-semibold uppercase tracking-wider text-gray-500 text-center">Action</TableHead>
                                 </TableRow>
@@ -745,7 +859,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                             <TableBody>
                                 {activities.length === 0 ? (
                                     <TableRow>
-                                        <TableCell colSpan={8} className="h-24 text-center text-slate-500">
+                                        <TableCell colSpan={9} className="h-24 text-center text-slate-500">
                                             No activities found. Create one to get started.
                                         </TableCell>
                                     </TableRow>
@@ -794,6 +908,23 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                                                 </div>
                                             </TableCell>
                                             <TableCell>
+                                                {activity.image_url ? (
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-8 px-2 text-slate-500 hover:text-blue-600"
+                                                        onClick={() => {
+                                                            setSelectedImageUrl(activity.image_url || null);
+                                                            setIsImageViewerOpen(true);
+                                                        }}
+                                                    >
+                                                        View Image
+                                                    </Button>
+                                                ) : (
+                                                    <span className="text-xs text-slate-400">-</span>
+                                                )}
+                                            </TableCell>
+                                            <TableCell>
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
@@ -838,6 +969,79 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                                 )}
                             </TableBody>
                         </Table>
+                        </div>
+
+                        <div className="md:hidden space-y-3">
+                            {activities.length === 0 ? (
+                                <div className="h-24 flex items-center justify-center text-slate-500 text-sm">
+                                    No activities found. Create one to get started.
+                                </div>
+                            ) : (
+                                activities.map((activity) => (
+                                    <div key={activity.activity_id} className="rounded-lg border bg-white p-3 space-y-2">
+                                        <div className="flex items-center justify-between gap-2">
+                                            <p className="font-semibold text-slate-900 text-sm">{activity.activity_name}</p>
+                                            <Badge variant="outline" className="bg-white text-slate-600 border-slate-200 font-normal text-[10px]">
+                                                {activity.tag}
+                                            </Badge>
+                                        </div>
+                                        <div className="text-xs text-slate-500">
+                                            {formatDate(activity.start_date)} - {formatDate(activity.end_date)}
+                                        </div>
+                                        <div className="flex items-center justify-between text-xs">
+                                            <span className="text-slate-600">Owner: {activity.owner || '-'}</span>
+                                            <span className="font-medium text-slate-700">{activity.progress}%</span>
+                                        </div>
+                                        <Progress value={activity.progress} className="h-1.5 bg-slate-100" indicatorClassName={cn(
+                                            activity.status === 'Completed' ? "bg-green-500" : "bg-blue-500"
+                                        )} />
+                                        <div className="flex flex-wrap gap-2 pt-1">
+                                            {activity.image_url && (
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 px-2 text-xs text-slate-500 hover:text-blue-600"
+                                                    onClick={() => {
+                                                        setSelectedImageUrl(activity.image_url || null);
+                                                        setIsImageViewerOpen(true);
+                                                    }}
+                                                >
+                                                    View Image
+                                                </Button>
+                                            )}
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs text-slate-500 hover:text-blue-600"
+                                                onClick={() => { setSelectedActivityForDetails(activity); setIsDetailsOpen(true); }}
+                                            >
+                                                Note
+                                            </Button>
+                                            {!readOnly && (
+                                                <>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-7 px-2 text-xs text-slate-600 hover:text-blue-600 hover:bg-blue-50"
+                                                        onClick={() => handleEditActivity(activity)}
+                                                    >
+                                                        Edit
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        className="h-7 px-2 text-xs text-slate-600 hover:text-red-600 hover:bg-red-50"
+                                                        onClick={() => handleDeleteActivity(activity.activity_id)}
+                                                    >
+                                                        Delete
+                                                    </Button>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
                     </div>
                 ) : (
                     <GanttChart activities={activities} />
@@ -850,6 +1054,25 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                 onClose={() => setIsDetailsOpen(false)}
                 onUpdate={fetchActivities}
             />
+
+            <Dialog open={isImageViewerOpen} onOpenChange={setIsImageViewerOpen}>
+                <DialogContent className="max-w-3xl w-[95vw] bg-white">
+                    <DialogHeader>
+                        <DialogTitle>Activity Image</DialogTitle>
+                    </DialogHeader>
+                    {selectedImageUrl ? (
+                        <div className="max-h-[75vh] overflow-auto rounded-md border bg-slate-50 p-2">
+                            <img
+                                src={selectedImageUrl}
+                                alt="Activity uploaded"
+                                className="w-full h-auto rounded-md object-contain"
+                            />
+                        </div>
+                    ) : (
+                        <div className="text-sm text-slate-500">No image available.</div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </Card>
     );
 }
