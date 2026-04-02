@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import {
     FolderKanban, CheckCircle2, Clock, Users, AlertCircle,
-    TrendingUp, CalendarDays, ArrowRight, Activity
+    TrendingUp, CalendarDays, ArrowRight, Activity, ClipboardCheck,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -74,6 +74,7 @@ export default function DashboardPage() {
     const [projects, setProjects] = useState<Project[]>([]);
     const [recentTasks, setRecentTasks] = useState<Task[]>([]);
     const [leaveBalance, setLeaveBalance] = useState<LeaveBalance | null>(null);
+    const [showAttendanceCheckInReminder, setShowAttendanceCheckInReminder] = useState(false);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => { init(); }, []);
@@ -114,6 +115,19 @@ export default function DashboardPage() {
                 return sum + diff;
             }, 0);
             setLeaveBalance(calcLeaveBalance(profile?.created_at || new Date().toISOString(), usedDays));
+        }
+
+        if (role && role !== 'Client') {
+            const today = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+            const { data: attLog } = await supabase
+                .from('attendance_logs')
+                .select('check_in_at')
+                .eq('user_id', user.id)
+                .eq('work_date', today)
+                .maybeSingle();
+            setShowAttendanceCheckInReminder(!((attLog as { check_in_at?: string } | null)?.check_in_at));
+        } else {
+            setShowAttendanceCheckInReminder(false);
         }
 
         await Promise.all([
@@ -212,6 +226,28 @@ export default function DashboardPage() {
                     {userRole === 'SiteSupervisor' ? 'Site Supervisor' : userRole}
                 </Badge>
             </div>
+
+            {showAttendanceCheckInReminder && (
+                <Card className="border-amber-200 bg-amber-50/80">
+                    <CardContent className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 py-4">
+                        <div className="flex items-start gap-3">
+                            <ClipboardCheck className="h-5 w-5 text-amber-700 shrink-0 mt-0.5" />
+                            <div>
+                                <p className="font-medium text-amber-900">Check in for today</p>
+                                <p className="text-sm text-amber-800/90 mt-0.5">
+                                    Daily attendance requires a photo and your location. Open Attendance to check in.
+                                </p>
+                            </div>
+                        </div>
+                        <Link
+                            href="/attendance"
+                            className="inline-flex items-center justify-center rounded-md text-sm font-medium bg-amber-700 text-white hover:bg-amber-800 px-4 py-2 shrink-0"
+                        >
+                            Go to attendance
+                        </Link>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Stat Cards */}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

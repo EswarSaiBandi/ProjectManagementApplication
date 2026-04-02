@@ -23,6 +23,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { FileText, Printer, Receipt, Trash2, Filter, Banknote, ImagePlus, ExternalLink } from 'lucide-react';
 
 const LABOUR_OVERHEAD_REF = 'labour_overhead';
+/** Matches seeded row in migration `20260401000700_mignonminds_company_overhead_project.sql`. */
+const COMPANY_OVERHEAD_PROJECT_NAME = 'MignonMinds — company overhead';
 
 type LabourRow = {
   id: number;
@@ -350,11 +352,21 @@ export default function ManpowerPayslipsPanel() {
         .reduce((s, o) => s + Number(o.amount), 0);
       const estimated = estAssignments + estOverhead;
       const paid = paymentsForLabour.filter((p) => p.labour_id === lid).reduce((s, p) => s + Number(p.amount), 0);
-      const name = labourList.find((l) => l.id === lid)?.name ?? `#${lid}`;
-      return { labourId: lid, name, estimated, paid, balance: estimated - paid };
+      const labour = labourList.find((l) => l.id === lid);
+      const name = labour?.name ?? `#${lid}`;
+      const labourType = labour?.labour_type ?? null;
+      return { labourId: lid, name, labourType, estimated, paid, balance: estimated - paid };
     });
     return rows.sort((a, b) => a.name.localeCompare(b.name));
   }, [labourIdsInView, filteredAssignments, filteredOverhead, paymentsForLabour, labourList]);
+
+  const overheadProjectOptions = useMemo(() => {
+    const company = projectList.find((p) => p.project_name === COMPANY_OVERHEAD_PROJECT_NAME);
+    const rest = projectList
+      .filter((p) => p.project_name !== COMPANY_OVERHEAD_PROJECT_NAME)
+      .sort((a, b) => a.project_name.localeCompare(b.project_name));
+    return company ? [company, ...rest] : rest;
+  }, [projectList]);
 
   const balanceTotals = useMemo(() => {
     return personBalanceRows.reduce(
@@ -412,7 +424,7 @@ export default function ManpowerPayslipsPanel() {
   const saveOverhead = async () => {
     if (savingOh) return;
     if (!ohProject || !ohLabour) {
-      toast.error('Select project and person');
+      toast.error('Select where to charge overhead and the person');
       return;
     }
     const amount = Number(ohAmount);
@@ -564,7 +576,8 @@ export default function ManpowerPayslipsPanel() {
           <p className="text-sm text-muted-foreground">
             Choose a person to see their full payment history, balance, and statement. Estimated cost follows project costing rules (in-house: salary ÷ 24 × bandwidth × days; outsourced: daily wage × days + incentive).{' '}
             <span className="text-slate-700">
-              Outsourced staff are typically paid weekly; employee (monthly) salary is paid on the <strong>5th</strong> of every month.
+              <strong>In-house:</strong> salary is <strong>due on the 5th</strong> of each month; build that cost from <strong>project assignments</strong> and/or <strong>overhead</strong> (use <strong>MignonMinds — company overhead</strong> for company-wide work like store maintenance).{' '}
+              Outsourced staff are typically paid weekly.
             </span>
           </p>
         </CardHeader>
@@ -642,7 +655,7 @@ export default function ManpowerPayslipsPanel() {
               Balance (estimated earnings − payments)
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Estimated = all assignment costs and manpower overhead for the person to date. Paid = all recorded transfers; each payment reduces the balance. Status reflects how estimated and paid compare.
+              Estimated = all assignment costs and manpower overhead for the person to date. Paid = all recorded transfers; each payment reduces the balance. In-house rows show when salary is due; cost should be covered from projects and/or overhead (including MignonMinds for company roles).
             </p>
           </CardHeader>
           <CardContent>
@@ -652,6 +665,7 @@ export default function ManpowerPayslipsPanel() {
                   <TableRow>
                     <TableHead>Person</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Payment due</TableHead>
                     <TableHead className="text-right">Estimated</TableHead>
                     <TableHead className="text-right">Paid</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
@@ -660,6 +674,18 @@ export default function ManpowerPayslipsPanel() {
                 <TableBody>
                   {personBalanceRows.map((r) => {
                     const st = paymentBalanceStatus(r.estimated, r.paid, r.balance);
+                    const dueLabel =
+                      r.labourType === 'In-House'
+                        ? '5th of month'
+                        : r.labourType === 'Outsourced'
+                          ? 'Weekly'
+                          : '—';
+                    const dueHint =
+                      r.labourType === 'In-House'
+                        ? 'Monthly salary run: pay on the 5th. Ensure estimated cost is built from project manpower and/or overhead lines (use MignonMinds — company overhead for non-project work).'
+                        : r.labourType === 'Outsourced'
+                          ? 'Typically paid weekly; costing comes from project assignments and any overhead you record.'
+                          : '';
                     return (
                       <TableRow key={r.labourId}>
                         <TableCell className="font-medium">{r.name}</TableCell>
@@ -677,6 +703,31 @@ export default function ManpowerPayslipsPanel() {
                             </TooltipContent>
                           </Tooltip>
                         </TableCell>
+                        <TableCell>
+                          {dueHint ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-block cursor-help">
+                                  <Badge
+                                    variant="outline"
+                                    className={
+                                      r.labourType === 'In-House'
+                                        ? 'font-normal border-violet-300 text-violet-900 bg-violet-50'
+                                        : 'font-normal border-slate-200 text-slate-700 bg-slate-50'
+                                    }
+                                  >
+                                    {dueLabel}
+                                  </Badge>
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-[280px]">
+                                {dueHint}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : (
+                            <span className="text-muted-foreground text-sm">—</span>
+                          )}
+                        </TableCell>
                         <TableCell className="text-right">{fmt(Math.round(r.estimated))}</TableCell>
                         <TableCell className="text-right">{fmt(Math.round(r.paid))}</TableCell>
                         <TableCell
@@ -692,6 +743,7 @@ export default function ManpowerPayslipsPanel() {
                   {personBalanceRows.length > 1 && (
                     <TableRow className="border-t-2 font-bold">
                       <TableCell>Total</TableCell>
+                      <TableCell>—</TableCell>
                       <TableCell>—</TableCell>
                       <TableCell className="text-right">{fmt(Math.round(balanceTotals.estimated))}</TableCell>
                       <TableCell className="text-right">{fmt(Math.round(balanceTotals.paid))}</TableCell>
@@ -761,23 +813,31 @@ export default function ManpowerPayslipsPanel() {
             Manpower overhead (actual)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Record extra manpower-related overhead (benefits, site admin share, etc.). A project is required for costing. Shown here by person only.
+            Charge overhead to a <strong>client project</strong> or to <strong>MignonMinds — company overhead</strong> for company-wide roles (e.g. someone overseeing maintenance at a store). Ledger still needs a project row for costing.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-2">
-              <Label>Project *</Label>
+              <Label>Cost to *</Label>
               <Select value={ohProject} onValueChange={setOhProject}>
                 <SelectTrigger className="bg-white">
-                  <SelectValue placeholder="Select" />
+                  <SelectValue placeholder="Select project or company" />
                 </SelectTrigger>
-                <SelectContent className="bg-white">
-                  {projectList.map((p) => (
-                    <SelectItem key={p.project_id} value={String(p.project_id)}>
-                      {p.project_name}
+                <SelectContent className="bg-white max-h-[280px]">
+                  {overheadProjectOptions.length === 0 ? (
+                    <SelectItem value="_empty" disabled>
+                      No projects — run migrations (includes MignonMinds company overhead)
                     </SelectItem>
-                  ))}
+                  ) : (
+                    overheadProjectOptions.map((p) => (
+                      <SelectItem key={p.project_id} value={String(p.project_id)}>
+                        {p.project_name === COMPANY_OVERHEAD_PROJECT_NAME
+                          ? 'MignonMinds — company overhead'
+                          : p.project_name}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -823,6 +883,7 @@ export default function ManpowerPayslipsPanel() {
                 <TableRow>
                   <TableHead>Date</TableHead>
                   {filterLabour === 'all' && <TableHead>Person</TableHead>}
+                  <TableHead className="max-w-[200px]">Cost to</TableHead>
                   <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Notes</TableHead>
                   <TableHead className="w-[70px]" />
@@ -833,6 +894,9 @@ export default function ManpowerPayslipsPanel() {
                   <TableRow key={o.ledger_id}>
                     <TableCell className="text-sm">{new Date(o.cost_date).toLocaleDateString('en-IN')}</TableCell>
                     {filterLabour === 'all' && <TableCell>{labourName(o.reference_id)}</TableCell>}
+                    <TableCell className="text-sm text-slate-700 max-w-[200px] truncate" title={projectName(o.project_id)}>
+                      {projectName(o.project_id)}
+                    </TableCell>
                     <TableCell className="text-right font-semibold">{fmt(Number(o.amount))}</TableCell>
                     <TableCell className="text-sm text-slate-600 max-w-[200px] truncate">{o.description || '—'}</TableCell>
                     <TableCell>
@@ -1053,6 +1117,12 @@ export default function ManpowerPayslipsPanel() {
                   {payslipLines.labour.designation || '—'} ·{' '}
                   {payslipLines.labour.labour_type === 'In-House' ? 'In-house' : 'Outsourced'}
                 </div>
+                {payslipLines.labour.labour_type === 'In-House' && (
+                  <p className="text-xs text-violet-900 bg-violet-50 border border-violet-200 rounded-md px-2 py-1.5 mt-2">
+                    <strong>Salary due:</strong> 5th of each month. Estimated pay should be covered from project assignments and/or overhead (including{' '}
+                    <strong>MignonMinds — company overhead</strong> for company-wide duties).
+                  </p>
+                )}
               </div>
             )}
 
@@ -1094,6 +1164,7 @@ export default function ManpowerPayslipsPanel() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Date</TableHead>
+                      <TableHead>Cost to</TableHead>
                       <TableHead className="text-right">Amount</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1101,6 +1172,9 @@ export default function ManpowerPayslipsPanel() {
                     {payslipLines.overhead.map((o) => (
                       <TableRow key={o.ledger_id}>
                         <TableCell>{new Date(o.cost_date).toLocaleDateString('en-IN')}</TableCell>
+                        <TableCell className="text-sm max-w-[180px] truncate" title={projectName(o.project_id)}>
+                          {projectName(o.project_id)}
+                        </TableCell>
                         <TableCell className="text-right">{fmt(Number(o.amount))}</TableCell>
                       </TableRow>
                     ))}

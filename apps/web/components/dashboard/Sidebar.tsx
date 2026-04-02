@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
     LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo,
-    PieChart, Layers, Settings, Target, CalendarOff, HardHat,
+    PieChart, Layers, Settings, Target, CalendarOff, HardHat, ClipboardCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -12,6 +12,7 @@ import { useRole } from '@/hooks/useRole';
 
 const ALL_NAV_ITEMS = [
     { label: 'Dashboard',  icon: LayoutDashboard, href: '/dashboard',  roles: ['Admin', 'ProjectManager', 'SiteSupervisor', 'Client'] },
+    { label: 'Attendance', icon: ClipboardCheck,  href: '/attendance', roles: ['Admin', 'ProjectManager', 'SiteSupervisor'] },
     { label: 'Leads',      icon: Target,          href: '/leads',      roles: ['Admin', 'ProjectManager'] },
     { label: 'Projects',   icon: FolderKanban,    href: '/projects',   roles: ['Admin', 'ProjectManager', 'SiteSupervisor', 'Client'] },
     { label: 'Schedule',   icon: CalendarDays,    href: '/schedule',   roles: ['Admin', 'ProjectManager', 'SiteSupervisor'] },
