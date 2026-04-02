@@ -922,7 +922,6 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      )}
     </div>
   );
 }
