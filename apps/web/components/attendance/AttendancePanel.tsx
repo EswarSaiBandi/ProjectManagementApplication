@@ -144,6 +144,9 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   const [proxySelectedLabourId, setProxySelectedLabourId] = useState<string>('');
   const [proxyCardTodayLog, setProxyCardTodayLog] = useState<AttendanceLog | null>(null);
 
+  const weeklyOffBypassRef = useRef(false);
+  const [weeklyOffConfirmOpen, setWeeklyOffConfirmOpen] = useState(false);
+
   const canViewStaffReport = me?.role === 'Admin' || me?.role === 'ProjectManager';
   const showStaffReportBlock = Boolean(showAdminReport && canViewStaffReport);
   const isTeamOverview = mode === 'team-overview';
@@ -443,6 +446,8 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
         if (prev) URL.revokeObjectURL(prev);
         return null;
       });
+      setWeeklyOffConfirmOpen(false);
+      weeklyOffBypassRef.current = false;
       return;
     }
     setCameraFacing('environment');
@@ -501,6 +506,106 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAttendanceDetailsOpen, selectedAttendance?.attendance_id]);
 
+  const commitAttendanceAfterCapture = async () => {
+    if (!me?.user_id) throw new Error('You must be logged in');
+    if (!photoBlob) throw new Error('Please capture a photo');
+    if (!geo) throw new Error('Location is required. Please allow location access.');
+
+    const today = getLocalISODate();
+    const proxyLabourId = attendanceDialogLabourId;
+    const isProxy = proxyLabourId != null;
+
+    const prefix = isProxy ? `${me.user_id}/proxy/${proxyLabourId}/${today}` : `${me.user_id}/${today}`;
+    const fileName = `${attendanceAction}-${Date.now()}.jpg`;
+    const path = `${prefix}/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage.from('attendance').upload(path, photoBlob, { contentType: 'image/jpeg' });
+    if (uploadError) {
+      const msg = String(uploadError.message || '');
+      if (msg.toLowerCase().includes('bucket not found')) {
+        throw new Error(
+          'Storage bucket "attendance" not found. Apply migration `20260208120000_setup_attendance_storage.sql`, then retry.'
+        );
+      }
+      throw uploadError;
+    }
+
+    if (isProxy) {
+      const { error: rpcErr } = await supabase.rpc('attendance_proxy_upsert', {
+        p_labour_id: proxyLabourId,
+        p_work_date: today,
+        p_checkin: attendanceAction === 'checkin',
+        p_lat: geo.lat,
+        p_lng: geo.lng,
+        p_accuracy: geo.accuracy,
+        p_photo_path: path,
+      });
+      if (rpcErr) throw rpcErr;
+      toast.success(attendanceAction === 'checkin' ? 'Checked in (field staff)' : 'Checked out (field staff)');
+    } else if (attendanceAction === 'checkin') {
+      if (todayLog?.check_in_at) {
+        toast.error('Already checked in today');
+        return;
+      }
+
+      if (todayLog?.attendance_id) {
+        const { error } = await supabase
+          .from('attendance_logs')
+          .update({
+            check_in_at: new Date().toISOString(),
+            check_in_lat: geo.lat,
+            check_in_lng: geo.lng,
+            check_in_accuracy: geo.accuracy,
+            check_in_photo_path: path,
+          })
+          .eq('attendance_id', todayLog.attendance_id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('attendance_logs').insert([
+          {
+            user_id: me.user_id,
+            work_date: today,
+            check_in_at: new Date().toISOString(),
+            check_in_lat: geo.lat,
+            check_in_lng: geo.lng,
+            check_in_accuracy: geo.accuracy,
+            check_in_photo_path: path,
+          },
+        ]);
+        if (error) throw error;
+      }
+
+      toast.success('Checked in successfully');
+    } else {
+      if (!todayLog?.attendance_id || !todayLog.check_in_at) {
+        toast.error('You must check in first');
+        return;
+      }
+      if (todayLog.check_out_at) {
+        toast.error('Already checked out today');
+        return;
+      }
+      const { error } = await supabase
+        .from('attendance_logs')
+        .update({
+          check_out_at: new Date().toISOString(),
+          check_out_lat: geo.lat,
+          check_out_lng: geo.lng,
+          check_out_accuracy: geo.accuracy,
+          check_out_photo_path: path,
+        })
+        .eq('attendance_id', todayLog.attendance_id);
+      if (error) throw error;
+      toast.success('Checked out successfully');
+    }
+
+    setIsAttendanceDialogOpen(false);
+    setAttendanceDialogLabourId(null);
+    await loadMyAttendance();
+    if (isProxy && proxyLabourId != null) await loadProxyCardTodayLog(proxyLabourId);
+    if (showStaffReportBlock) await loadAdminAttendance();
+  };
+
   const handleConfirmAttendance = async () => {
     if (!me?.user_id) {
       toast.error('You must be logged in');
@@ -519,97 +624,25 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       return;
     }
 
+    if (attendanceAction === 'checkin' && !weeklyOffBypassRef.current) {
+      const { data: needsWeeklyOffConfirm, error: woErr } = await supabase.rpc('should_confirm_weekly_off_checkin', {
+        p_profile_user_id: isProxy ? null : me.user_id,
+        p_labour_id: isProxy ? proxyLabourId : null,
+        p_work_date: today,
+      });
+      if (woErr) {
+        toast.error(formatAttendanceSaveError(woErr));
+        return;
+      }
+      if (needsWeeklyOffConfirm === true) {
+        setWeeklyOffConfirmOpen(true);
+        return;
+      }
+    }
+
     setIsCapturing(true);
     try {
-      const prefix = isProxy ? `${me.user_id}/proxy/${proxyLabourId}/${today}` : `${me.user_id}/${today}`;
-      const fileName = `${attendanceAction}-${Date.now()}.jpg`;
-      const path = `${prefix}/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage.from('attendance').upload(path, photoBlob, { contentType: 'image/jpeg' });
-      if (uploadError) {
-        const msg = String(uploadError.message || '');
-        if (msg.toLowerCase().includes('bucket not found')) {
-          throw new Error(
-            'Storage bucket "attendance" not found. Apply migration `20260208120000_setup_attendance_storage.sql`, then retry.'
-          );
-        }
-        throw uploadError;
-      }
-
-      if (isProxy) {
-        const { error: rpcErr } = await supabase.rpc('attendance_proxy_upsert', {
-          p_labour_id: proxyLabourId,
-          p_work_date: today,
-          p_checkin: attendanceAction === 'checkin',
-          p_lat: geo.lat,
-          p_lng: geo.lng,
-          p_accuracy: geo.accuracy,
-          p_photo_path: path,
-        });
-        if (rpcErr) throw rpcErr;
-        toast.success(attendanceAction === 'checkin' ? 'Checked in (field staff)' : 'Checked out (field staff)');
-      } else if (attendanceAction === 'checkin') {
-        if (todayLog?.check_in_at) {
-          toast.error('Already checked in today');
-          return;
-        }
-
-        if (todayLog?.attendance_id) {
-          const { error } = await supabase
-            .from('attendance_logs')
-            .update({
-              check_in_at: new Date().toISOString(),
-              check_in_lat: geo.lat,
-              check_in_lng: geo.lng,
-              check_in_accuracy: geo.accuracy,
-              check_in_photo_path: path,
-            })
-            .eq('attendance_id', todayLog.attendance_id);
-          if (error) throw error;
-        } else {
-          const { error } = await supabase.from('attendance_logs').insert([
-            {
-              user_id: me.user_id,
-              work_date: today,
-              check_in_at: new Date().toISOString(),
-              check_in_lat: geo.lat,
-              check_in_lng: geo.lng,
-              check_in_accuracy: geo.accuracy,
-              check_in_photo_path: path,
-            },
-          ]);
-          if (error) throw error;
-        }
-
-        toast.success('Checked in successfully');
-      } else {
-        if (!todayLog?.attendance_id || !todayLog.check_in_at) {
-          toast.error('You must check in first');
-          return;
-        }
-        if (todayLog.check_out_at) {
-          toast.error('Already checked out today');
-          return;
-        }
-        const { error } = await supabase
-          .from('attendance_logs')
-          .update({
-            check_out_at: new Date().toISOString(),
-            check_out_lat: geo.lat,
-            check_out_lng: geo.lng,
-            check_out_accuracy: geo.accuracy,
-            check_out_photo_path: path,
-          })
-          .eq('attendance_id', todayLog.attendance_id);
-        if (error) throw error;
-        toast.success('Checked out successfully');
-      }
-
-      setIsAttendanceDialogOpen(false);
-      setAttendanceDialogLabourId(null);
-      await loadMyAttendance();
-      if (isProxy && proxyLabourId != null) await loadProxyCardTodayLog(proxyLabourId);
-      if (showStaffReportBlock) await loadAdminAttendance();
+      await commitAttendanceAfterCapture();
     } catch (e: unknown) {
       console.error(e);
       toast.error(formatAttendanceSaveError(e));
@@ -1191,10 +1224,46 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
               Cancel
             </Button>
             <Button
-              onClick={handleConfirmAttendance}
+              onClick={() => void handleConfirmAttendance()}
               disabled={isCapturing || !photoBlob || !geo}
             >
               {isCapturing ? 'Saving…' : 'Confirm'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={weeklyOffConfirmOpen} onOpenChange={setWeeklyOffConfirmOpen}>
+        <DialogContent className="max-w-md bg-white">
+          <DialogHeader>
+            <DialogTitle>Weekly off day</DialogTitle>
+            <DialogDescription>
+              Today is configured as a weekly off for {attendanceDialogLabourId != null ? 'this field staff member' : 'you'}. Do you still
+              want to record check-in?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" onClick={() => setWeeklyOffConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                weeklyOffBypassRef.current = true;
+                setWeeklyOffConfirmOpen(false);
+                void (async () => {
+                  setIsCapturing(true);
+                  try {
+                    await commitAttendanceAfterCapture();
+                  } catch (e: unknown) {
+                    console.error(e);
+                    toast.error(formatAttendanceSaveError(e));
+                  } finally {
+                    setIsCapturing(false);
+                  }
+                })();
+              }}
+            >
+              Continue anyway
             </Button>
           </DialogFooter>
         </DialogContent>

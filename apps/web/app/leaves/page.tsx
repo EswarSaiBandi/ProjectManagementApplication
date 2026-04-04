@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import {
     Plus, CheckCircle2, XCircle, Clock, CalendarDays,
-    User, Trash2, RotateCcw, ChevronRight
+    User, Trash2, RotateCcw, ChevronRight, Palmtree
 } from 'lucide-react';
 
 type LeaveRequest = {
@@ -63,6 +63,13 @@ const BORDER_COLOR: Record<string, string> = {
 
 type AdminView = 'all' | 'pending' | 'approved' | 'rejected' | 'cancellation' | 'cancelled';
 
+type WeeklyOffSubject = 'profile' | 'labour';
+
+type FieldStaffOption = { id: number; name: string };
+
+/** 0 = Sunday … 6 = Saturday (same as JS Date.getDay()) */
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
 type LeaveBalance = { accrued_days: number; used_days: number; available_days: number };
 
 function calcLeaveBalance(profileCreatedAt: string, approvedLeaves: LeaveRequest[]): LeaveBalance {
@@ -92,8 +99,17 @@ export default function LeavesPage() {
     const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
     const [loading, setLoading] = useState(true);
     const [token, setToken] = useState('');
-    const [activeTab, setActiveTab] = useState<'my' | 'manage'>('my');
+    const [activeTab, setActiveTab] = useState<'my' | 'manage' | 'weekly-off'>('my');
     const [adminFilter, setAdminFilter] = useState<AdminView>('all');
+
+    const [woSubjectType, setWoSubjectType] = useState<WeeklyOffSubject>('profile');
+    const [woProfileUserId, setWoProfileUserId] = useState('');
+    const [woLabourId, setWoLabourId] = useState('');
+    const [woFieldStaff, setWoFieldStaff] = useState<FieldStaffOption[]>([]);
+    const [woDays, setWoDays] = useState<Set<number>>(new Set());
+    const [woLoadingList, setWoLoadingList] = useState(false);
+    const [woLoadingDays, setWoLoadingDays] = useState(false);
+    const [woSaving, setWoSaving] = useState(false);
 
     const [isDialogOpen, setIsDialogOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -122,6 +138,149 @@ export default function LeavesPage() {
             ...(r === 'Admin' || r === 'ProjectManager' ? [fetchTeamMembers()] : []),
         ]);
         setLoading(false);
+    };
+
+    const fetchWeeklyOffFieldStaff = async () => {
+        setWoLoadingList(true);
+        try {
+            const { data: pm, error: pmErr } = await supabase
+                .from('project_manpower')
+                .select('labour_id')
+                .not('labour_id', 'is', null);
+            if (pmErr) throw pmErr;
+            const ids = Array.from(
+                new Set(
+                    (pm || [])
+                        .map((r: { labour_id: number | null }) => r.labour_id)
+                        .filter((id): id is number => typeof id === 'number')
+                )
+            );
+            if (ids.length === 0) {
+                setWoFieldStaff([]);
+                return;
+            }
+            const { data: lm, error: lmErr } = await supabase
+                .from('labour_master')
+                .select('id, name')
+                .in('id', ids)
+                .eq('is_active', true)
+                .order('name');
+            if (lmErr) throw lmErr;
+            setWoFieldStaff((lm as FieldStaffOption[]) || []);
+        } catch (e: unknown) {
+            console.error(e);
+            toast.error(e instanceof Error ? e.message : 'Failed to load field staff');
+            setWoFieldStaff([]);
+        } finally {
+            setWoLoadingList(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab !== 'weekly-off' || !isAdmin) return;
+        void fetchWeeklyOffFieldStaff();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab, isAdmin]);
+
+    useEffect(() => {
+        if (activeTab !== 'weekly-off' || !isAdmin) return;
+        let cancelled = false;
+        (async () => {
+            if (woSubjectType === 'profile' && !woProfileUserId) {
+                setWoDays(new Set());
+                setWoLoadingDays(false);
+                return;
+            }
+            if (woSubjectType === 'labour' && !woLabourId) {
+                setWoDays(new Set());
+                setWoLoadingDays(false);
+                return;
+            }
+            setWoLoadingDays(true);
+            try {
+                if (woSubjectType === 'profile') {
+                    const { data, error } = await supabase
+                        .from('weekly_offs')
+                        .select('day_of_week')
+                        .eq('profile_user_id', woProfileUserId);
+                    if (error) throw error;
+                    if (!cancelled) setWoDays(new Set((data || []).map((r: { day_of_week: number }) => r.day_of_week)));
+                } else {
+                    const { data, error } = await supabase
+                        .from('weekly_offs')
+                        .select('day_of_week')
+                        .eq('labour_id', Number(woLabourId));
+                    if (error) throw error;
+                    if (!cancelled) setWoDays(new Set((data || []).map((r: { day_of_week: number }) => r.day_of_week)));
+                }
+            } catch (e: unknown) {
+                if (!cancelled) {
+                    console.error(e);
+                    toast.error(e instanceof Error ? e.message : 'Failed to load weekly offs');
+                    setWoDays(new Set());
+                }
+            } finally {
+                if (!cancelled) setWoLoadingDays(false);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [activeTab, isAdmin, woSubjectType, woProfileUserId, woLabourId]);
+
+    const toggleWoDay = (d: number) => {
+        setWoDays((prev) => {
+            const next = new Set(prev);
+            if (next.has(d)) next.delete(d);
+            else next.add(d);
+            return next;
+        });
+    };
+
+    const handleSaveWeeklyOffs = async () => {
+        if (!myUserId) return;
+        if (woSubjectType === 'profile' && !woProfileUserId) {
+            toast.error('Select a team member');
+            return;
+        }
+        if (woSubjectType === 'labour' && !woLabourId) {
+            toast.error('Select a field staff member');
+            return;
+        }
+        setWoSaving(true);
+        try {
+            if (woSubjectType === 'profile') {
+                const { error: delErr } = await supabase.from('weekly_offs').delete().eq('profile_user_id', woProfileUserId);
+                if (delErr) throw delErr;
+                if (woDays.size > 0) {
+                    const rows = Array.from(woDays).map((day_of_week) => ({
+                        profile_user_id: woProfileUserId,
+                        day_of_week,
+                        created_by: myUserId,
+                    }));
+                    const { error: insErr } = await supabase.from('weekly_offs').insert(rows);
+                    if (insErr) throw insErr;
+                }
+            } else {
+                const lid = Number(woLabourId);
+                const { error: delErr } = await supabase.from('weekly_offs').delete().eq('labour_id', lid);
+                if (delErr) throw delErr;
+                if (woDays.size > 0) {
+                    const rows = Array.from(woDays).map((day_of_week) => ({
+                        labour_id: lid,
+                        day_of_week,
+                        created_by: myUserId,
+                    }));
+                    const { error: insErr } = await supabase.from('weekly_offs').insert(rows);
+                    if (insErr) throw insErr;
+                }
+            }
+            toast.success('Weekly off days saved');
+        } catch (e: unknown) {
+            toast.error(e instanceof Error ? e.message : 'Failed to save');
+        } finally {
+            setWoSaving(false);
+        }
     };
 
     const fetchLeaves = async (t: string) => {
@@ -312,6 +471,16 @@ export default function LeavesPage() {
                         {pending.length > 0 && (
                             <span className="bg-red-500 text-white text-xs rounded-full px-1.5 py-0.5 leading-none">{pending.length}</span>
                         )}
+                    </button>
+                )}
+                {isAdmin && (
+                    <button
+                        type="button"
+                        onClick={() => setActiveTab('weekly-off')}
+                        className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${activeTab === 'weekly-off' ? 'border-blue-600 text-blue-600' : 'border-transparent text-muted-foreground hover:text-slate-700'}`}
+                    >
+                        <Palmtree className="h-4 w-4" />
+                        Weekly off
                     </button>
                 )}
             </div>
@@ -522,6 +691,110 @@ export default function LeavesPage() {
                         </div>
                     )}
                 </div>
+            )}
+
+            {activeTab === 'weekly-off' && isAdmin && (
+                <Card>
+                    <CardContent className="py-6 px-5 space-y-5">
+                        <div>
+                            <h3 className="text-lg font-semibold text-slate-800">Weekly off days</h3>
+                            <p className="text-sm text-muted-foreground mt-1">
+                                Set recurring weekdays off for team members (with login) or field staff on manpower. On a weekly off, check-in asks for an extra confirmation (including proxy check-in).
+                            </p>
+                        </div>
+
+                        <div className="space-y-2">
+                            <Label>Applies to</Label>
+                            <Select
+                                value={woSubjectType}
+                                onValueChange={(v) => {
+                                    const t = v as WeeklyOffSubject;
+                                    setWoSubjectType(t);
+                                    setWoProfileUserId('');
+                                    setWoLabourId('');
+                                    setWoDays(new Set());
+                                }}
+                            >
+                                <SelectTrigger><SelectValue /></SelectTrigger>
+                                <SelectContent className="bg-white">
+                                    <SelectItem value="profile" className="bg-white hover:bg-slate-50">Team (login accounts)</SelectItem>
+                                    <SelectItem value="labour" className="bg-white hover:bg-slate-50">Field staff (manpower)</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        {woSubjectType === 'profile' ? (
+                            <div className="space-y-2">
+                                <Label>Team member</Label>
+                                <Select value={woProfileUserId || '__none__'} onValueChange={(v) => setWoProfileUserId(v === '__none__' ? '' : v)}>
+                                    <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                                    <SelectContent className="bg-white max-h-72">
+                                        <SelectItem value="__none__" className="bg-white hover:bg-slate-50">Select…</SelectItem>
+                                        {teamMembers.map((m) => (
+                                            <SelectItem key={m.user_id} value={m.user_id} className="bg-white hover:bg-slate-50">
+                                                {m.full_name || 'Unnamed'} · {m.role}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        ) : (
+                            <div className="space-y-2">
+                                <Label>Field staff</Label>
+                                {woLoadingList ? (
+                                    <p className="text-sm text-muted-foreground">Loading…</p>
+                                ) : woFieldStaff.length === 0 ? (
+                                    <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                                        No active labour linked to projects. Add people in the manpower module first.
+                                    </p>
+                                ) : (
+                                    <Select value={woLabourId || '__none__'} onValueChange={(v) => setWoLabourId(v === '__none__' ? '' : v)}>
+                                        <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                                        <SelectContent className="bg-white max-h-72">
+                                            <SelectItem value="__none__" className="bg-white hover:bg-slate-50">Select…</SelectItem>
+                                            {woFieldStaff.map((l) => (
+                                                <SelectItem key={l.id} value={String(l.id)} className="bg-white hover:bg-slate-50">
+                                                    {l.name}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                )}
+                            </div>
+                        )}
+
+                        <div className="space-y-2">
+                            <Label>Off days (each week)</Label>
+                            {woLoadingDays ? (
+                                <p className="text-sm text-muted-foreground">Loading schedule…</p>
+                            ) : (
+                                <div className="flex flex-wrap gap-2">
+                                    {WEEKDAY_LABELS.map((label, d) => (
+                                        <button
+                                            key={d}
+                                            type="button"
+                                            onClick={() => toggleWoDay(d)}
+                                            className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                                                woDays.has(d)
+                                                    ? 'border-blue-500 bg-blue-50 text-blue-800'
+                                                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                            <p className="text-xs text-muted-foreground">Sunday = 0 … Saturday = 6 (same as the attendance calendar).</p>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <Button onClick={() => void handleSaveWeeklyOffs()} disabled={woSaving || woLoadingDays} className="bg-blue-600 hover:bg-blue-700">
+                                {woSaving ? 'Saving…' : 'Save weekly offs'}
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
             )}
 
             {/* Apply / Raise Leave Dialog */}
