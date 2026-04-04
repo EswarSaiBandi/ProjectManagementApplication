@@ -3,9 +3,11 @@
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { COMPANY } from '@/lib/company';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
@@ -58,8 +60,18 @@ export default function LoginPage() {
         <div className="flex h-screen items-center justify-center bg-gray-50">
             <Card className="w-[350px]">
                 <CardHeader>
-                    <CardTitle>Project Studio</CardTitle>
+                    <div className="mb-2 flex items-center justify-center">
+                        <Image
+                            src={COMPANY.logoLightPath}
+                            alt={COMPANY.name}
+                            width={64}
+                            height={64}
+                            className="h-14 w-14 rounded-md object-contain"
+                        />
+                    </div>
+                    <CardTitle>{COMPANY.name}</CardTitle>
                     <CardDescription>Login to access your dashboard</CardDescription>
+                    <CardDescription>GST: {COMPANY.gstNo}</CardDescription>
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handleLogin} className="space-y-4">

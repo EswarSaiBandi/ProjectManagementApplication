@@ -69,6 +69,8 @@ export default function TeamPage() {
     const [showResetPassword, setShowResetPassword] = useState(false);
     const [newPassword, setNewPassword] = useState('');
     const [isResettingPassword, setIsResettingPassword] = useState(false);
+    /** Login email from Auth (read-only in edit dialog); empty while loading or on error */
+    const [memberEmailForEdit, setMemberEmailForEdit] = useState<string>('');
     
     // Form state
     const [memberForm, setMemberForm] = useState({
@@ -349,6 +351,7 @@ export default function TeamPage() {
 
     const handleNewMember = () => {
         setEditingMember(null);
+        setMemberEmailForEdit('');
         setMemberForm({
             email: '',
             password: '',
@@ -359,8 +362,9 @@ export default function TeamPage() {
         setIsMemberDialogOpen(true);
     };
 
-    const handleEditMember = (member: TeamMember) => {
+    const handleEditMember = async (member: TeamMember) => {
         setEditingMember(member);
+        setMemberEmailForEdit('');
         setMemberForm({
             email: '',
             password: '', // Don't show password for edit
@@ -368,7 +372,28 @@ export default function TeamPage() {
             role: member.role || 'SiteSupervisor',
             phone: member.phone || '',
         });
+        setShowResetPassword(false);
+        setNewPassword('');
         setIsMemberDialogOpen(true);
+        try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const token = sessionData?.session?.access_token;
+            if (!token) {
+                setMemberEmailForEdit('—');
+                return;
+            }
+            const res = await fetch(`/api/team/members?user_id=${encodeURIComponent(member.user_id)}`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            const json = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setMemberEmailForEdit(json?.error ? String(json.error) : 'Unable to load email');
+                return;
+            }
+            setMemberEmailForEdit(String(json?.email || '—'));
+        } catch {
+            setMemberEmailForEdit('Unable to load email');
+        }
     };
 
     const handleResetPassword = async () => {
@@ -707,7 +732,17 @@ export default function TeamPage() {
                     )}
 
                     {/* Add/Edit Member Dialog */}
-                    <Dialog open={isMemberDialogOpen} onOpenChange={setIsMemberDialogOpen}>
+                    <Dialog
+                        open={isMemberDialogOpen}
+                        onOpenChange={(open) => {
+                            setIsMemberDialogOpen(open);
+                            if (!open) {
+                                setMemberEmailForEdit('');
+                                setShowResetPassword(false);
+                                setNewPassword('');
+                            }
+                        }}
+                    >
                         <DialogContent className="max-w-lg bg-white">
                             <DialogHeader>
                                 <DialogTitle className="text-lg font-semibold">
@@ -728,7 +763,13 @@ export default function TeamPage() {
                                     </div>
                                     <div className="min-w-0">
                                         <p className="font-medium text-sm truncate">{editingMember.full_name}</p>
-                                        <p className="text-xs text-muted-foreground truncate">{editingMember.email}</p>
+                                        {(memberEmailForEdit || editingMember.email) ? (
+                                            <p className="text-xs text-muted-foreground truncate">
+                                                {memberEmailForEdit || editingMember.email}
+                                            </p>
+                                        ) : (
+                                            <p className="text-xs text-muted-foreground">Loading email…</p>
+                                        )}
                                     </div>
                                     <Badge className={`ml-auto flex-shrink-0 ${editingMember.is_active === false ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
                                         {editingMember.is_active === false ? 'Inactive' : 'Active'}
@@ -747,6 +788,22 @@ export default function TeamPage() {
                                         placeholder="e.g. Ravi Kumar"
                                     />
                                 </div>
+
+                                {editingMember && (
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="member_email_readonly">Email</Label>
+                                        <Input
+                                            id="member_email_readonly"
+                                            type="email"
+                                            readOnly
+                                            className="bg-slate-50 text-slate-700 cursor-default"
+                                            value={memberEmailForEdit === '' ? 'Loading email…' : memberEmailForEdit}
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                            Login email (from account). It cannot be changed here — contact support or recreate the user if needed.
+                                        </p>
+                                    </div>
+                                )}
 
                                 {/* Email — only for new member */}
                                 {!editingMember && (

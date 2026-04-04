@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Toaster } from "sonner";
+import { COMPANY } from "@/lib/company";
 
 export const metadata: Metadata = {
-  title: "Project Management Application",
-  description: "Comprehensive project management system",
+  title: `${COMPANY.name} | Project Management`,
+  description: `${COMPANY.name} project management system`,
 };
 
 export default function RootLayout({

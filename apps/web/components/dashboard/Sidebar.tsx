@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import {
     LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo,
@@ -9,6 +10,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useRole } from '@/hooks/useRole';
+import { COMPANY } from '@/lib/company';
 
 const ALL_NAV_ITEMS = [
     { label: 'Dashboard',  icon: LayoutDashboard, href: '/dashboard',  roles: ['Admin', 'ProjectManager', 'SiteSupervisor', 'Client'] },
@@ -37,8 +39,14 @@ export function Sidebar() {
     return (
         <TooltipProvider delayDuration={0}>
             <div className="flex h-screen w-16 flex-col border-r bg-white items-center py-4">
-                <div className="mb-6 h-8 w-8 rounded-full bg-blue-900 flex items-center justify-center text-white font-bold text-xs">
-                    PS
+                <div className="mb-6 h-8 w-8 overflow-hidden rounded-full bg-white border flex items-center justify-center">
+                    <Image
+                        src={COMPANY.logoDarkPath}
+                        alt={COMPANY.name}
+                        width={32}
+                        height={32}
+                        className="h-8 w-8 object-cover"
+                    />
                 </div>
 
                 <nav className="flex-1 flex flex-col gap-2 w-full px-2">

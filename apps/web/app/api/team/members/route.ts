@@ -12,6 +12,65 @@ function isValidEmail(email: string) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+async function assertAdminOrProjectManager(
+    supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
+    requesterUserId: string
+): Promise<{ ok: true } | { ok: false; response: NextResponse }> {
+    const { data: requesterProfile, error: requesterProfileError } = await supabaseAdmin
+        .from('profiles')
+        .select('role')
+        .eq('user_id', requesterUserId)
+        .limit(1);
+    if (requesterProfileError) {
+        return { ok: false, response: jsonError('Failed to validate permissions', 500) };
+    }
+    const requesterRole = String(requesterProfile?.[0]?.role || '').toLowerCase();
+    if (!['admin', 'projectmanager'].includes(requesterRole)) {
+        return { ok: false, response: jsonError('Forbidden', 403) };
+    }
+    return { ok: true };
+}
+
+/** GET ?user_id= — return auth email for that user (Admin / Project Manager only). */
+export async function GET(req: Request) {
+    try {
+        let supabaseAdmin;
+        try {
+            supabaseAdmin = getSupabaseAdmin();
+        } catch (e: any) {
+            return jsonError(e?.message || 'Server misconfigured', 500);
+        }
+
+        const authHeader = req.headers.get('authorization') || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length) : '';
+        if (!token) return jsonError('Unauthorized', 401);
+
+        const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+        const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+        const supabaseAuth = createClient(supabaseUrl, anonKey, {
+            auth: { persistSession: false, autoRefreshToken: false },
+        });
+        const { data: userData, error: userError } = await supabaseAuth.auth.getUser(token);
+        if (userError || !userData?.user) return jsonError('Unauthorized', 401);
+
+        const gate = await assertAdminOrProjectManager(supabaseAdmin, userData.user.id);
+        if (!gate.ok) return gate.response;
+
+        const { searchParams } = new URL(req.url);
+        const targetUserId = String(searchParams.get('user_id') || '').trim();
+        if (!targetUserId) return jsonError('user_id is required', 400);
+
+        const { data: authUser, error: getErr } = await supabaseAdmin.auth.admin.getUserById(targetUserId);
+        if (getErr || !authUser?.user) {
+            return jsonError(getErr?.message || 'User not found', 404);
+        }
+
+        return NextResponse.json({ email: authUser.user.email ?? '' });
+    } catch (e: any) {
+        return jsonError(e?.message || 'Unexpected error', 500);
+    }
+}
+
 export async function POST(req: Request) {
     try {
         let supabaseAdmin;

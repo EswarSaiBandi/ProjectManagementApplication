@@ -11,10 +11,13 @@ import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { normalizePhoneDigits } from '@/lib/phone';
 
 export type AttendanceLog = {
   attendance_id: number;
-  user_id: string;
+  user_id: string | null;
+  labour_id?: number | null;
+  marked_by_user_id?: string | null;
   work_date: string;
   check_in_at: string | null;
   check_out_at: string | null;
@@ -64,6 +67,16 @@ async function getAttendanceCameraStream(facing: CameraFacing): Promise<MediaStr
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error('Camera unavailable');
+}
+
+function formatAttendanceSaveError(e: unknown): string {
+  if (e && typeof e === 'object' && 'message' in e) {
+    const o = e as { message?: string; details?: string; hint?: string; code?: string };
+    const parts = [o.message, o.details, o.hint].filter((x) => x && String(x).trim());
+    return parts.length ? parts.join(' — ') : 'Failed to save attendance';
+  }
+  if (e instanceof Error) return e.message || 'Failed to save attendance';
+  return 'Failed to save attendance';
 }
 
 function osmEmbedUrl(lat: number, lng: number) {
@@ -120,13 +133,93 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   const [adminAttUserId, setAdminAttUserId] = useState<string>('');
   const [adminAttRows, setAdminAttRows] = useState<AttendanceLog[]>([]);
   const [adminAttLoading, setAdminAttLoading] = useState(false);
+  const [adminAttLabourId, setAdminAttLabourId] = useState<string>('');
+  const [adminLabourPicklist, setAdminLabourPicklist] = useState<{ id: number; name: string }[]>([]);
+  const [labourNameById, setLabourNameById] = useState<Record<number, string>>({});
+
+  /** null = self attendance dialog; number = proxy for labour id */
+  const [attendanceDialogLabourId, setAttendanceDialogLabourId] = useState<number | null>(null);
+  type ProxyLabourRow = { id: number; name: string; phone: string | null };
+  const [proxyEligibleLabour, setProxyEligibleLabour] = useState<ProxyLabourRow[]>([]);
+  const [proxySelectedLabourId, setProxySelectedLabourId] = useState<string>('');
+  const [proxyCardTodayLog, setProxyCardTodayLog] = useState<AttendanceLog | null>(null);
 
   const canViewStaffReport = me?.role === 'Admin' || me?.role === 'ProjectManager';
   const showStaffReportBlock = Boolean(showAdminReport && canViewStaffReport);
   const isTeamOverview = mode === 'team-overview';
+  /** Proxy (manpower, no login) check-in/out: site leads + office roles */
+  const canProxyMarkAttendance =
+    !isTeamOverview &&
+    (me?.role === 'SiteSupervisor' || me?.role === 'Admin' || me?.role === 'ProjectManager');
 
   const resolveName = (userId: string) =>
     nameDirectory.find((n) => n.user_id === userId)?.full_name || userId.slice(0, 8) + '…';
+
+  const rowSubjectLabel = (row: AttendanceLog) => {
+    if (row.user_id) return resolveName(row.user_id);
+    if (row.labour_id != null) {
+      const nm = labourNameById[row.labour_id];
+      return nm ? `${nm} (field)` : `Field staff #${row.labour_id}`;
+    }
+    return '—';
+  };
+
+  const loadProxyEligibleLabour = async () => {
+    if (!canProxyMarkAttendance || !me?.user_id) return;
+    try {
+      const [{ data: pm }, { data: labourRows }, { data: profs }] = await Promise.all([
+        supabase.from('project_manpower').select('labour_id, team_member_id').not('labour_id', 'is', null),
+        supabase.from('labour_master').select('id, name, phone').eq('is_active', true),
+        supabase.from('profiles').select('phone'),
+      ]);
+      const linkedToMember = new Set(
+        (pm || []).filter((r: { team_member_id?: string | null }) => r.team_member_id).map((r: { labour_id: number }) => r.labour_id)
+      );
+      const profPhones = new Set(
+        (profs || [])
+          .map((p: { phone?: string | null }) => normalizePhoneDigits(p.phone || null))
+          .filter(Boolean)
+      );
+      const usedLabourIds = new Set(
+        (pm || []).map((r: { labour_id?: number | null }) => r.labour_id).filter((id): id is number => typeof id === 'number')
+      );
+      const eligible = (labourRows || []).filter((l: { id: number; phone?: string | null }) => {
+        if (!usedLabourIds.has(l.id)) return false;
+        if (linkedToMember.has(l.id)) return false;
+        const np = normalizePhoneDigits(l.phone || null);
+        if (np && profPhones.has(np)) return false;
+        return true;
+      }) as ProxyLabourRow[];
+      eligible.sort((a, b) => a.name.localeCompare(b.name));
+      setProxyEligibleLabour(eligible);
+      setLabourNameById((prev) => {
+        const n = { ...prev };
+        eligible.forEach((l) => {
+          n[l.id] = l.name;
+        });
+        return n;
+      });
+    } catch (e) {
+      console.error(e);
+      setProxyEligibleLabour([]);
+    }
+  };
+
+  const loadProxyCardTodayLog = async (labourId: number) => {
+    const today = getLocalISODate();
+    const { data, error } = await supabase
+      .from('attendance_logs')
+      .select('*')
+      .eq('labour_id', labourId)
+      .eq('work_date', today)
+      .maybeSingle();
+    if (error) {
+      console.error(error);
+      setProxyCardTodayLog(null);
+      return;
+    }
+    setProxyCardTodayLog((data as AttendanceLog) || null);
+  };
 
   const stopCamera = () => {
     try {
@@ -275,7 +368,8 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       let q = supabase.from('attendance_logs').select('*').order('work_date', { ascending: false }).limit(800);
       if (adminAttFrom) q = q.gte('work_date', adminAttFrom);
       if (adminAttTo) q = q.lte('work_date', adminAttTo);
-      if (adminAttUserId) q = q.eq('user_id', adminAttUserId);
+      if (adminAttLabourId) q = q.eq('labour_id', Number(adminAttLabourId));
+      else if (adminAttUserId) q = q.eq('user_id', adminAttUserId);
       const { data, error } = await q;
       if (error) throw error;
       setAdminAttRows((data as AttendanceLog[]) || []);
@@ -296,16 +390,52 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   }, [me?.user_id, isTeamOverview]);
 
   useEffect(() => {
+    if (!canProxyMarkAttendance) return;
+    loadProxyEligibleLabour();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canProxyMarkAttendance, me?.user_id]);
+
+  useEffect(() => {
     if (showStaffReportBlock) {
       loadAdminAttendance();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showStaffReportBlock, adminAttFrom, adminAttTo, adminAttUserId]);
+  }, [showStaffReportBlock, adminAttFrom, adminAttTo, adminAttUserId, adminAttLabourId]);
+
+  useEffect(() => {
+    if (!showStaffReportBlock) return;
+    void (async () => {
+      const { data } = await supabase.from('labour_master').select('id, name').eq('is_active', true).order('name');
+      setAdminLabourPicklist((data as { id: number; name: string }[]) || []);
+    })();
+  }, [showStaffReportBlock]);
+
+  useEffect(() => {
+    if (!showStaffReportBlock || adminAttRows.length === 0) return;
+    const ids = Array.from(
+      new Set(
+        adminAttRows.map((r) => r.labour_id).filter((x): x is number => x != null && Number.isFinite(Number(x)))
+      )
+    );
+    if (ids.length === 0) return;
+    void (async () => {
+      const { data } = await supabase.from('labour_master').select('id, name').in('id', ids);
+      if (!data?.length) return;
+      setLabourNameById((prev) => {
+        const n = { ...prev };
+        (data as { id: number; name: string }[]).forEach((row) => {
+          n[row.id] = row.name;
+        });
+        return n;
+      });
+    })();
+  }, [adminAttRows, showStaffReportBlock]);
 
   useEffect(() => {
     if (!isAttendanceDialogOpen) {
       stopCamera();
       setCameraFacing('environment');
+      setAttendanceDialogLabourId(null);
       setGeo(null);
       setGeoError(null);
       setPhotoBlob(null);
@@ -377,6 +507,8 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       return;
     }
     const today = getLocalISODate();
+    const proxyLabourId = attendanceDialogLabourId;
+    const isProxy = proxyLabourId != null;
 
     if (!photoBlob) {
       toast.error('Please capture a photo');
@@ -389,7 +521,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
 
     setIsCapturing(true);
     try {
-      const prefix = `${me.user_id}/${today}`;
+      const prefix = isProxy ? `${me.user_id}/proxy/${proxyLabourId}/${today}` : `${me.user_id}/${today}`;
       const fileName = `${attendanceAction}-${Date.now()}.jpg`;
       const path = `${prefix}/${fileName}`;
 
@@ -404,7 +536,19 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
         throw uploadError;
       }
 
-      if (attendanceAction === 'checkin') {
+      if (isProxy) {
+        const { error: rpcErr } = await supabase.rpc('attendance_proxy_upsert', {
+          p_labour_id: proxyLabourId,
+          p_work_date: today,
+          p_checkin: attendanceAction === 'checkin',
+          p_lat: geo.lat,
+          p_lng: geo.lng,
+          p_accuracy: geo.accuracy,
+          p_photo_path: path,
+        });
+        if (rpcErr) throw rpcErr;
+        toast.success(attendanceAction === 'checkin' ? 'Checked in (field staff)' : 'Checked out (field staff)');
+      } else if (attendanceAction === 'checkin') {
         if (todayLog?.check_in_at) {
           toast.error('Already checked in today');
           return;
@@ -462,22 +606,23 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       }
 
       setIsAttendanceDialogOpen(false);
+      setAttendanceDialogLabourId(null);
       await loadMyAttendance();
+      if (isProxy && proxyLabourId != null) await loadProxyCardTodayLog(proxyLabourId);
       if (showStaffReportBlock) await loadAdminAttendance();
     } catch (e: unknown) {
       console.error(e);
-      toast.error(e instanceof Error ? e.message : 'Failed to save attendance');
+      toast.error(formatAttendanceSaveError(e));
     } finally {
       setIsCapturing(false);
     }
   };
 
-  const detailSubjectName =
-    selectedAttendance && me?.user_id === selectedAttendance.user_id
+  const detailSubjectName = selectedAttendance
+    ? selectedAttendance.user_id && me?.user_id === selectedAttendance.user_id
       ? 'You'
-      : selectedAttendance
-        ? resolveName(selectedAttendance.user_id)
-        : '';
+      : rowSubjectLabel(selectedAttendance)
+    : '';
 
   return (
     <div className="space-y-6">
@@ -514,6 +659,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
             <Button
               onClick={() => {
                 setAttendanceAction('checkin');
+                setAttendanceDialogLabourId(null);
                 setIsAttendanceDialogOpen(true);
               }}
               disabled={!me?.user_id || !!todayLog?.check_in_at}
@@ -524,6 +670,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
               variant="outline"
               onClick={() => {
                 setAttendanceAction('checkout');
+                setAttendanceDialogLabourId(null);
                 setIsAttendanceDialogOpen(true);
               }}
               disabled={!me?.user_id || !todayLog?.check_in_at || !!todayLog?.check_out_at}
@@ -540,6 +687,92 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
           </p>
         </CardContent>
       </Card>
+      )}
+
+      {canProxyMarkAttendance && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Field staff (no app login)</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              For supervisors, admins, and project managers. Only people listed on a project in{' '}
+              <span className="font-medium">Manpower</span> appear here. If their mobile matches a team profile, or they are linked as a
+              team member on manpower, they must use their own account — you cannot mark attendance for them.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-1 max-w-md">
+              <Label className="text-xs">Person</Label>
+              <Select
+                value={proxySelectedLabourId || '__none__'}
+                onValueChange={(v) => {
+                  const id = v === '__none__' ? '' : v;
+                  setProxySelectedLabourId(id);
+                  if (id) void loadProxyCardTodayLog(Number(id));
+                  else setProxyCardTodayLog(null);
+                }}
+              >
+                <SelectTrigger className="bg-white w-full sm:w-[320px]">
+                  <SelectValue placeholder="Select field staff…" />
+                </SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="__none__">— Select —</SelectItem>
+                  {proxyEligibleLabour.map((l) => (
+                    <SelectItem key={l.id} value={String(l.id)}>
+                      {l.name}
+                      {l.phone ? ` · ${l.phone}` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {proxySelectedLabourId ? (
+              <>
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Clock className="h-4 w-4" />
+                  <span>
+                    {proxyCardTodayLog?.check_in_at
+                      ? proxyCardTodayLog.check_out_at
+                        ? 'Checked out'
+                        : 'Checked in'
+                      : 'Not checked in'}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => {
+                      const id = Number(proxySelectedLabourId);
+                      if (!Number.isFinite(id)) return;
+                      setAttendanceAction('checkin');
+                      setAttendanceDialogLabourId(id);
+                      setIsAttendanceDialogOpen(true);
+                    }}
+                    disabled={!!proxyCardTodayLog?.check_in_at}
+                  >
+                    Check In for selected
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const id = Number(proxySelectedLabourId);
+                      if (!Number.isFinite(id)) return;
+                      setAttendanceAction('checkout');
+                      setAttendanceDialogLabourId(id);
+                      setIsAttendanceDialogOpen(true);
+                    }}
+                    disabled={!proxyCardTodayLog?.check_in_at || !!proxyCardTodayLog?.check_out_at}
+                  >
+                    Check Out for selected
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => void loadProxyCardTodayLog(Number(proxySelectedLabourId))}>
+                    Refresh
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Select someone from manpower who does not have their own login.</p>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {!isTeamOverview && (
@@ -598,15 +831,24 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
               {isTeamOverview ? 'Team attendance overview' : 'All staff attendance'}
             </CardTitle>
             <p className="text-xs text-muted-foreground">
-              Filter by date and person. Open a row for photos and maps. Admins and project managers need migrations{' '}
-              <code className="text-[11px]">20260401000800</code> and <code className="text-[11px]">20260401000900</code> applied.
+              Filter by date, team member, or field (manpower) row. Open a row for photos and maps. Apply migrations{' '}
+              <code className="text-[11px]">20260401000800</code>, <code className="text-[11px]">20260401000900</code>, and{' '}
+              <code className="text-[11px]">20260404120000</code>, <code className="text-[11px]">20260404131000</code>, and{' '}
+              <code className="text-[11px]">20260404133000</code> for field-staff proxy attendance.
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1 min-w-[200px]">
-                <Label className="text-xs">Person</Label>
-                <Select value={adminAttUserId || '__all__'} onValueChange={(v) => setAdminAttUserId(v === '__all__' ? '' : v)}>
+                <Label className="text-xs">Team member</Label>
+                <Select
+                  value={adminAttUserId || '__all__'}
+                  onValueChange={(v) => {
+                    const uid = v === '__all__' ? '' : v;
+                    setAdminAttUserId(uid);
+                    if (uid) setAdminAttLabourId('');
+                  }}
+                >
                   <SelectTrigger className="bg-white w-[220px]">
                     <SelectValue placeholder="Everyone" />
                   </SelectTrigger>
@@ -620,6 +862,29 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
                           {n.full_name || n.user_id.slice(0, 8) + '…'}
                         </SelectItem>
                       ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1 min-w-[200px]">
+                <Label className="text-xs">Field staff (manpower)</Label>
+                <Select
+                  value={adminAttLabourId || '__all__'}
+                  onValueChange={(v) => {
+                    const lid = v === '__all__' ? '' : v;
+                    setAdminAttLabourId(lid);
+                    if (lid) setAdminAttUserId('');
+                  }}
+                >
+                  <SelectTrigger className="bg-white w-[220px]">
+                    <SelectValue placeholder="All" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white">
+                    <SelectItem value="__all__">All</SelectItem>
+                    {adminLabourPicklist.map((l) => (
+                      <SelectItem key={l.id} value={String(l.id)}>
+                        {l.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -661,7 +926,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
                         }}
                       >
                         <TableCell className="font-medium whitespace-nowrap">{r.work_date}</TableCell>
-                        <TableCell className="text-sm">{resolveName(r.user_id)}</TableCell>
+                        <TableCell className="text-sm">{rowSubjectLabel(r)}</TableCell>
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                           {r.check_in_at ? new Date(r.check_in_at).toLocaleString() : '—'}
                         </TableCell>
@@ -817,10 +1082,22 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       <Dialog open={isAttendanceDialogOpen} onOpenChange={setIsAttendanceDialogOpen}>
         <DialogContent className="max-w-2xl bg-white">
           <DialogHeader>
-            <DialogTitle>{attendanceAction === 'checkin' ? 'Check In' : 'Check Out'}</DialogTitle>
+            <DialogTitle>
+              {attendanceDialogLabourId != null
+                ? `${attendanceAction === 'checkin' ? 'Check In' : 'Check Out'} — field staff`
+                : attendanceAction === 'checkin'
+                  ? 'Check In'
+                  : 'Check Out'}
+            </DialogTitle>
             <DialogDescription>
               Capture a photo with the camera and record GPS location. Both are required to submit. On a phone, use{' '}
               <span className="font-medium">Switch camera</span> to choose the front or rear lens if both are available.
+              {attendanceDialogLabourId != null && (
+                <>
+                  {' '}
+                  This attendance is recorded for the selected field staff member under your account (marked by you).
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
