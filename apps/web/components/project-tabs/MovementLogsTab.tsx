@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -43,6 +43,8 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
   const [filteredLogs, setFilteredLogs] = useState<MovementLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterType, setFilterType] = useState<string>('all');
+  const [filterProjectId, setFilterProjectId] = useState<string>('all');
+  const [filterMaterialId, setFilterMaterialId] = useState<string>('all');
   const [selectedLog, setSelectedLog] = useState<MovementLog | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
@@ -50,9 +52,59 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
     fetchLogs();
   }, [projectId]);
 
+  const projectFilterOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    let hasUnassigned = false;
+    for (const log of logs) {
+      if (log.project_id == null) {
+        hasUnassigned = true;
+      } else if (log.project_name) {
+        map.set(log.project_id, log.project_name);
+      } else {
+        map.set(log.project_id, `Project #${log.project_id}`);
+      }
+    }
+    const rows = Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+    return { rows, hasUnassigned };
+  }, [logs]);
+
+  const materialFilterOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const log of logs) {
+      const label = log.material_name?.trim() || `Material #${log.material_id}`;
+      map.set(log.material_id, label);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [logs]);
+
   useEffect(() => {
-    applyFilter();
-  }, [filterType, logs]);
+    let result = logs;
+    if (filterType === 'all') {
+      // keep all
+    } else if (filterType === 'Stock Reduction') {
+      result = result.filter(
+        (log) => log.movement_type === 'Store Out' && log.reference_type === 'Manual Adjustment'
+      );
+    } else {
+      result = result.filter((log) => log.movement_type === filterType);
+    }
+
+    if (!projectId && filterProjectId !== 'all') {
+      if (filterProjectId === 'none') {
+        result = result.filter((log) => log.project_id == null);
+      } else {
+        const pid = Number(filterProjectId);
+        result = result.filter((log) => log.project_id === pid);
+      }
+    }
+
+    if (filterMaterialId !== 'all') {
+      const mid = Number(filterMaterialId);
+      result = result.filter((log) => log.material_id === mid);
+    }
+
+    setFilteredLogs(result);
+  }, [filterType, filterProjectId, filterMaterialId, logs, projectId]);
 
   const fetchLogs = async () => {
     try {
@@ -83,25 +135,10 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
       }));
       
       setLogs(logsWithDetails);
-      setFilteredLogs(logsWithDetails);
     } catch (error: any) {
       toast.error('Failed to load movement logs: ' + error.message);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const applyFilter = () => {
-    if (filterType === 'all') {
-      setFilteredLogs(logs);
-    } else if (filterType === 'Stock Reduction') {
-      setFilteredLogs(
-        logs.filter(
-          (log) => log.movement_type === 'Store Out' && log.reference_type === 'Manual Adjustment'
-        )
-      );
-    } else {
-      setFilteredLogs(logs.filter(log => log.movement_type === filterType));
     }
   };
 
@@ -223,15 +260,15 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
     <div className="space-y-6">
       <Card className="bg-white shadow-sm">
         <CardHeader className="border-b bg-slate-50">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <CardTitle className="flex items-center gap-2">
               <ArrowDownUp className="h-5 w-5 text-blue-600" />
               Material Movement Logs {projectId && '(This Project)'}
             </CardTitle>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Select value={filterType} onValueChange={setFilterType}>
                 <SelectTrigger className="w-[200px] bg-white">
-                  <SelectValue placeholder="Filter by type" />
+                  <SelectValue placeholder="Movement type" />
                 </SelectTrigger>
                 <SelectContent className="bg-white">
                   <SelectItem value="all">All Movements</SelectItem>
@@ -243,6 +280,37 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
                   <SelectItem value="Return to Store">Return to Store</SelectItem>
                   <SelectItem value="Local Procurement">Local Procurement</SelectItem>
                   <SelectItem value="Stock Used">Stock Used</SelectItem>
+                </SelectContent>
+              </Select>
+              {!projectId && (
+                <Select value={filterProjectId} onValueChange={setFilterProjectId}>
+                  <SelectTrigger className="w-[200px] bg-white">
+                    <SelectValue placeholder="Project" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-white max-h-72">
+                    <SelectItem value="all">All projects</SelectItem>
+                    {projectFilterOptions.hasUnassigned && (
+                      <SelectItem value="none">No project</SelectItem>
+                    )}
+                    {projectFilterOptions.rows.map(([id, name]) => (
+                      <SelectItem key={id} value={String(id)}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <Select value={filterMaterialId} onValueChange={setFilterMaterialId}>
+                <SelectTrigger className="w-[220px] bg-white">
+                  <SelectValue placeholder="Material" />
+                </SelectTrigger>
+                <SelectContent className="bg-white max-h-72">
+                  <SelectItem value="all">All materials</SelectItem>
+                  {materialFilterOptions.map(([id, name]) => (
+                    <SelectItem key={id} value={String(id)}>
+                      {name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Badge variant="outline" className="px-3 py-1">
