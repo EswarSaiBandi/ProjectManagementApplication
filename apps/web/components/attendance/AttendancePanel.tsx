@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Camera, Clock, LocateFixed, SwitchCamera } from 'lucide-react';
+import { Camera, Clock, Download, LocateFixed, SwitchCamera } from 'lucide-react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
@@ -77,6 +77,25 @@ function formatAttendanceSaveError(e: unknown): string {
   }
   if (e instanceof Error) return e.message || 'Failed to save attendance';
   return 'Failed to save attendance';
+}
+
+function formatAttendanceDateTime(iso: string | null) {
+  return iso ? new Date(iso).toLocaleString() : '';
+}
+
+async function downloadRowsAsExcel(
+  rows: AttendanceLog[],
+  sheetName: string,
+  fileName: string,
+  rowToRecord: (r: AttendanceLog) => Record<string, string | number | ''>
+) {
+  if (rows.length === 0) return;
+  const XLSX = await import('xlsx');
+  const data = rows.map(rowToRecord);
+  const ws = XLSX.utils.json_to_sheet(data);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
+  XLSX.writeFile(wb, fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`);
 }
 
 function osmEmbedUrl(lat: number, lng: number) {
@@ -165,6 +184,55 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       return nm ? `${nm} (field)` : `Field staff #${row.labour_id}`;
     }
     return '—';
+  };
+
+  const exportStaffReportExcel = () => {
+    void (async () => {
+      try {
+        await downloadRowsAsExcel(adminAttRows, 'Attendance', `attendance-${adminAttFrom}_to_${adminAttTo}`, (r) => ({
+          'Work date': r.work_date,
+          Person: rowSubjectLabel(r),
+          'Check in': formatAttendanceDateTime(r.check_in_at),
+          'Check out': formatAttendanceDateTime(r.check_out_at),
+          'Has check-in GPS': r.check_in_lat != null && r.check_in_lng != null ? 'Yes' : 'No',
+          'Has check-out GPS': r.check_out_lat != null && r.check_out_lng != null ? 'Yes' : 'No',
+          'Check in lat': r.check_in_lat ?? '',
+          'Check in lng': r.check_in_lng ?? '',
+          'Check in accuracy (m)':
+            r.check_in_accuracy != null ? Math.round(Number(r.check_in_accuracy)) : '',
+          'Check out lat': r.check_out_lat ?? '',
+          'Check out lng': r.check_out_lng ?? '',
+          'Check out accuracy (m)':
+            r.check_out_accuracy != null ? Math.round(Number(r.check_out_accuracy)) : '',
+        }));
+        toast.success('Excel file downloaded');
+      } catch (e) {
+        console.error(e);
+        toast.error('Could not create Excel file');
+      }
+    })();
+  };
+
+  const exportMyAttendanceExcel = () => {
+    void (async () => {
+      try {
+        await downloadRowsAsExcel(
+          attendanceHistory,
+          'My attendance',
+          `my-attendance-${getLocalISODate()}`,
+          (r) => ({
+            Date: r.work_date,
+            'Check in': r.check_in_at ? new Date(r.check_in_at).toLocaleTimeString() : '',
+            'Check out': r.check_out_at ? new Date(r.check_out_at).toLocaleTimeString() : '',
+            'Accuracy (m)': r.check_in_accuracy != null ? Math.round(Number(r.check_in_accuracy)) : '',
+          })
+        );
+        toast.success('Excel file downloaded');
+      } catch (e) {
+        console.error(e);
+        toast.error('Could not create Excel file');
+      }
+    })();
   };
 
   const loadProxyEligibleLabour = async () => {
@@ -810,8 +878,14 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
 
       {!isTeamOverview && (
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
           <CardTitle className="text-sm font-medium">My last 30 days</CardTitle>
+          {attendanceHistory.length > 0 ? (
+            <Button type="button" variant="outline" size="sm" onClick={exportMyAttendanceExcel}>
+              <Download className="h-4 w-4 mr-1.5" aria-hidden />
+              Download Excel
+            </Button>
+          ) : null}
         </CardHeader>
         <CardContent>
           {attendanceHistory.length === 0 ? (
@@ -931,6 +1005,16 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
               </div>
               <Button type="button" variant="outline" size="sm" onClick={loadAdminAttendance} disabled={adminAttLoading}>
                 {adminAttLoading ? 'Loading…' : 'Refresh'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={exportStaffReportExcel}
+                disabled={adminAttLoading || adminAttRows.length === 0}
+              >
+                <Download className="h-4 w-4 mr-1.5" aria-hidden />
+                Download Excel
               </Button>
             </div>
             {adminAttRows.length === 0 && !adminAttLoading ? (
