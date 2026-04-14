@@ -92,7 +92,7 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
         { label: "Activities",         icon: Activity,      value: "activities",            roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Client Progress",    icon: PieChart,      value: "client-progress",       roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Tasks",              icon: ListTodo,      value: "tasks",                 roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
-        { label: "Quotes",             icon: Percent,       value: "quotes",                roles: ['Admin','ProjectManager'] },
+        { label: "Quotes",             icon: Percent,       value: "quotes",                roles: ['Admin','ProjectManager','Client'] },
         { label: "Orders",             icon: Triangle,      value: "orders",                roles: ['Admin','ProjectManager'] },
         { label: "Invoices",           icon: FileText,      value: "invoices",              roles: ['Admin','ProjectManager'] },
         { label: "Material Request",   icon: ShoppingBag,   value: "purchase-request",      roles: ['Admin','ProjectManager','SiteSupervisor'] },
@@ -160,7 +160,7 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                     {activeTab === 'activities' && <ActivitiesTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'tasks' && <TasksTab projectId={params.id} readOnly={isClient} />}
-                    {activeTab === 'quotes' && <QuotesTab projectId={params.id} />}
+                    {activeTab === 'quotes' && <QuotesTab projectId={params.id} role={role || null} />}
                     {activeTab === 'orders' && <OrdersTab projectId={params.id} />}
                     {activeTab === 'invoices' && <InvoicesTab projectId={params.id} />}
                     {activeTab === 'purchase-request' && <MaterialRequestTab projectId={params.id} />}

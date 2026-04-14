@@ -19,6 +19,7 @@ export type AttendanceLog = {
   labour_id?: number | null;
   marked_by_user_id?: string | null;
   work_date: string;
+  attendance_status?: AttendanceStatusCode | null;
   check_in_at: string | null;
   check_out_at: string | null;
   check_in_lat: number | null;
@@ -34,6 +35,19 @@ export type AttendanceLog = {
 type Me = { user_id: string; full_name: string | null; role: string | null; email: string | null } | null;
 
 type NameRow = { user_id: string; full_name: string | null };
+type LabourPickOption = { id: number; name: string; labour_type?: 'In-House' | 'Outsourced' | null };
+type AttendanceStatusCode = 'WO' | 'HO' | 'CO' | 'HD' | 'CL' | 'SL' | 'PL' | 'LOP';
+
+const ATTENDANCE_STATUS_OPTIONS: { code: AttendanceStatusCode; label: string }[] = [
+  { code: 'WO', label: 'WO (Week Off)' },
+  { code: 'HO', label: 'HO (Holiday)' },
+  { code: 'CO', label: 'CO (Company Off)' },
+  { code: 'HD', label: 'HD (Half Day)' },
+  { code: 'CL', label: 'CL (Casual Leave)' },
+  { code: 'SL', label: 'SL (Sick Leave)' },
+  { code: 'PL', label: 'PL (Paid Leave)' },
+  { code: 'LOP', label: 'LOP (Loss of Pay)' },
+];
 
 function getLocalISODate(d = new Date()) {
   return new Intl.DateTimeFormat('en-CA', {
@@ -81,6 +95,11 @@ function formatAttendanceSaveError(e: unknown): string {
 
 function formatAttendanceDateTime(iso: string | null) {
   return iso ? new Date(iso).toLocaleString() : '';
+}
+
+function attendanceStatusLabel(code: AttendanceStatusCode | null | undefined) {
+  if (!code) return '—';
+  return ATTENDANCE_STATUS_OPTIONS.find((o) => o.code === code)?.label || code;
 }
 
 async function downloadRowsAsExcel(
@@ -153,8 +172,17 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   const [adminAttRows, setAdminAttRows] = useState<AttendanceLog[]>([]);
   const [adminAttLoading, setAdminAttLoading] = useState(false);
   const [adminAttLabourId, setAdminAttLabourId] = useState<string>('');
-  const [adminLabourPicklist, setAdminLabourPicklist] = useState<{ id: number; name: string }[]>([]);
+  const [adminLabourPicklist, setAdminLabourPicklist] = useState<LabourPickOption[]>([]);
   const [labourNameById, setLabourNameById] = useState<Record<number, string>>({});
+  const [labourProjectsById, setLabourProjectsById] = useState<Record<number, string[]>>({});
+  const [adminStatusDate, setAdminStatusDate] = useState(() => getLocalISODate());
+  const [adminStatusCode, setAdminStatusCode] = useState<AttendanceStatusCode>('WO');
+  const [adminStatusTargetType, setAdminStatusTargetType] = useState<'team' | 'field'>('team');
+  const [adminStatusSelectedUserIds, setAdminStatusSelectedUserIds] = useState<string[]>([]);
+  const [adminStatusSelectedLabourIds, setAdminStatusSelectedLabourIds] = useState<string[]>([]);
+  const [adminStatusSearch, setAdminStatusSearch] = useState('');
+  const [adminStatusSaving, setAdminStatusSaving] = useState(false);
+  const [labourHasLoginById, setLabourHasLoginById] = useState<Record<number, boolean>>({});
 
   /** null = self attendance dialog; number = proxy for labour id */
   const [attendanceDialogLabourId, setAttendanceDialogLabourId] = useState<number | null>(null);
@@ -177,6 +205,24 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   const resolveName = (userId: string) =>
     nameDirectory.find((n) => n.user_id === userId)?.full_name || userId.slice(0, 8) + '…';
 
+  const teamMemberHasLogin = (userId: string | null | undefined) =>
+    !!userId && nameDirectory.some((n) => n.user_id === userId);
+
+  const labourHasLogin = (labourId: number | null | undefined) =>
+    labourId != null ? !!labourHasLoginById[labourId] : false;
+
+  const rowLoginStatus = (row: AttendanceLog) => {
+    if (row.user_id) return teamMemberHasLogin(row.user_id) ? 'Has Login' : 'NO LOGIN';
+    if (row.labour_id != null) return labourHasLogin(row.labour_id) ? 'Has Login' : 'NO LOGIN';
+    return 'NO LOGIN';
+  };
+
+  const rowAssignedProjects = (row: AttendanceLog) => {
+    if (row.labour_id == null) return '—';
+    const names = labourProjectsById[row.labour_id] || [];
+    return names.length > 0 ? names.join(', ') : 'Unassigned';
+  };
+
   const rowSubjectLabel = (row: AttendanceLog) => {
     if (row.user_id) return resolveName(row.user_id);
     if (row.labour_id != null) {
@@ -191,7 +237,12 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       try {
         await downloadRowsAsExcel(adminAttRows, 'Attendance', `attendance-${adminAttFrom}_to_${adminAttTo}`, (r) => ({
           'Work date': r.work_date,
+          'Subject type': r.user_id ? 'Team member' : r.labour_id != null ? 'Field staff' : 'Unknown',
           Person: rowSubjectLabel(r),
+          'Assigned projects': rowAssignedProjects(r),
+          Status: r.attendance_status || '',
+          'Login status': rowLoginStatus(r),
+          'No-login highlight': rowLoginStatus(r) === 'NO LOGIN' ? '*** NO LOGIN ***' : '',
           'Check in': formatAttendanceDateTime(r.check_in_at),
           'Check out': formatAttendanceDateTime(r.check_out_at),
           'Has check-in GPS': r.check_in_lat != null && r.check_in_lng != null ? 'Yes' : 'No',
@@ -222,6 +273,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
           `my-attendance-${getLocalISODate()}`,
           (r) => ({
             Date: r.work_date,
+            Status: r.attendance_status || '',
             'Check in': r.check_in_at ? new Date(r.check_in_at).toLocaleTimeString() : '',
             'Check out': r.check_out_at ? new Date(r.check_out_at).toLocaleTimeString() : '',
             'Accuracy (m)': r.check_in_accuracy != null ? Math.round(Number(r.check_in_accuracy)) : '',
@@ -453,6 +505,59 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
     }
   };
 
+  const saveAdminAttendanceStatus = async () => {
+    if (!showStaffReportBlock) return;
+    if (!adminStatusDate) {
+      toast.error('Select a date');
+      return;
+    }
+    const targetUserIds = adminStatusTargetType === 'team' ? adminStatusSelectedUserIds : [];
+    const targetLabourIds = adminStatusTargetType === 'field' ? adminStatusSelectedLabourIds.map((x) => Number(x)) : [];
+    if (targetUserIds.length === 0 && targetLabourIds.length === 0) {
+      toast.error('Select at least one person to update');
+      return;
+    }
+
+    setAdminStatusSaving(true);
+    try {
+      if (targetUserIds.length > 0) {
+        const userResults = await Promise.all(
+          targetUserIds.map((uid) =>
+            supabase.rpc('upsert_attendance_status', {
+              p_work_date: adminStatusDate,
+              p_attendance_status: adminStatusCode,
+              p_user_id: uid,
+              p_labour_id: null,
+            })
+          )
+        );
+        const userErr = userResults.find((r) => r.error)?.error;
+        if (userErr) throw userErr;
+      } else if (targetLabourIds.length > 0) {
+        const labourResults = await Promise.all(
+          targetLabourIds.map((lid) =>
+            supabase.rpc('upsert_attendance_status', {
+              p_work_date: adminStatusDate,
+              p_attendance_status: adminStatusCode,
+              p_user_id: null,
+              p_labour_id: lid,
+            })
+          )
+        );
+        const labourErr = labourResults.find((r) => r.error)?.error;
+        if (labourErr) throw labourErr;
+      }
+      const total = targetUserIds.length + targetLabourIds.length;
+      toast.success(`Attendance marked: ${adminStatusCode} on ${adminStatusDate} for ${total} people`);
+      await loadAdminAttendance();
+      if (targetUserIds.includes(me?.user_id || '')) await loadMyAttendance();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save attendance status');
+    } finally {
+      setAdminStatusSaving(false);
+    }
+  };
+
   useEffect(() => {
     if (isTeamOverview) return;
     if (!me?.user_id) return;
@@ -476,8 +581,8 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   useEffect(() => {
     if (!showStaffReportBlock) return;
     void (async () => {
-      const { data } = await supabase.from('labour_master').select('id, name').eq('is_active', true).order('name');
-      setAdminLabourPicklist((data as { id: number; name: string }[]) || []);
+      const { data: labourData } = await supabase.from('labour_master').select('id, name, labour_type').eq('is_active', true).order('name');
+      setAdminLabourPicklist((labourData as LabourPickOption[]) || []);
     })();
   }, [showStaffReportBlock]);
 
@@ -499,6 +604,93 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
         });
         return n;
       });
+    })();
+  }, [adminAttRows, showStaffReportBlock]);
+
+  useEffect(() => {
+    if (!showStaffReportBlock) return;
+    const labourIds = Array.from(
+      new Set(
+        adminAttRows.map((r) => r.labour_id).filter((x): x is number => x != null && Number.isFinite(Number(x)))
+      )
+    );
+    if (labourIds.length === 0) {
+      setLabourProjectsById({});
+      return;
+    }
+    void (async () => {
+      try {
+        const { data: pmRows, error } = await supabase
+          .from('project_manpower')
+          .select('labour_id, project_id')
+          .in('labour_id', labourIds);
+        if (error) throw error;
+        const projectIds = Array.from(
+          new Set(
+            (pmRows || [])
+              .map((r: { project_id?: number | null }) => r.project_id)
+              .filter((x): x is number => x != null && Number.isFinite(Number(x)))
+          )
+        );
+        const projectNameById: Record<number, string> = {};
+        if (projectIds.length > 0) {
+          const { data: prows } = await supabase.from('projects').select('project_id, project_name').in('project_id', projectIds);
+          (prows || []).forEach((p: { project_id: number; project_name: string }) => {
+            projectNameById[p.project_id] = p.project_name;
+          });
+        }
+        const mapping: Record<number, string[]> = {};
+        (pmRows || []).forEach((r: { labour_id: number; project_id: number }) => {
+          if (!mapping[r.labour_id]) mapping[r.labour_id] = [];
+          const projectName = projectNameById[r.project_id] || `Project #${r.project_id}`;
+          if (!mapping[r.labour_id].includes(projectName)) mapping[r.labour_id].push(projectName);
+        });
+        setLabourProjectsById(mapping);
+      } catch (e) {
+        console.error(e);
+        setLabourProjectsById({});
+      }
+    })();
+  }, [adminAttRows, showStaffReportBlock]);
+
+  useEffect(() => {
+    if (!showStaffReportBlock) return;
+    const ids = Array.from(
+      new Set(
+        adminAttRows.map((r) => r.labour_id).filter((x): x is number => x != null && Number.isFinite(Number(x)))
+      )
+    );
+    if (ids.length === 0) {
+      setLabourHasLoginById({});
+      return;
+    }
+    void (async () => {
+      try {
+        const [{ data: labourRows }, { data: profs }, { data: pmRows }] = await Promise.all([
+          supabase.from('labour_master').select('id, phone').in('id', ids),
+          supabase.from('profiles').select('phone'),
+          supabase.from('project_manpower').select('labour_id, team_member_id').in('labour_id', ids),
+        ]);
+        const profilePhones = new Set(
+          (profs || [])
+            .map((p: { phone?: string | null }) => normalizePhoneDigits(p.phone || null))
+            .filter(Boolean)
+        );
+        const linkedLabourIds = new Set(
+          (pmRows || [])
+            .filter((r: { team_member_id?: string | null }) => !!r.team_member_id)
+            .map((r: { labour_id: number }) => r.labour_id)
+        );
+        const hasLoginMap: Record<number, boolean> = {};
+        (labourRows || []).forEach((row: { id: number; phone?: string | null }) => {
+          const normalized = normalizePhoneDigits(row.phone || null);
+          hasLoginMap[row.id] = linkedLabourIds.has(row.id) || (!!normalized && profilePhones.has(normalized));
+        });
+        setLabourHasLoginById(hasLoginMap);
+      } catch (e) {
+        console.error(e);
+        setLabourHasLoginById({});
+      }
     })();
   }, [adminAttRows, showStaffReportBlock]);
 
@@ -725,6 +917,24 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       : rowSubjectLabel(selectedAttendance)
     : '';
 
+  const statusTeamOptions = [...nameDirectory]
+    .filter((n) => n.user_id)
+    .sort((a, b) => String(a.full_name || a.user_id).localeCompare(String(b.full_name || b.user_id)))
+    .filter((n) => {
+      const q = adminStatusSearch.trim().toLowerCase();
+      if (!q) return true;
+      const label = String(n.full_name || n.user_id).toLowerCase();
+      return label.includes(q);
+    });
+
+  const statusFieldOptions = [...adminLabourPicklist]
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+    .filter((l) => {
+      const q = adminStatusSearch.trim().toLowerCase();
+      if (!q) return true;
+      return String(l.name || '').toLowerCase().includes(q);
+    });
+
   return (
     <div className="space-y-6">
       {isTeamOverview && !canViewStaffReport && (
@@ -896,6 +1106,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
                 <TableHeader>
                   <TableRow>
                     <TableHead>Date</TableHead>
+                    <TableHead>Status</TableHead>
                     <TableHead>Check In</TableHead>
                     <TableHead>Check Out</TableHead>
                     <TableHead className="text-right">Accuracy (m)</TableHead>
@@ -912,6 +1123,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
                       }}
                     >
                       <TableCell className="font-medium">{r.work_date}</TableCell>
+                      <TableCell className="text-muted-foreground text-sm">{attendanceStatusLabel(r.attendance_status)}</TableCell>
                       <TableCell className="text-muted-foreground text-sm">
                         {r.check_in_at ? new Date(r.check_in_at).toLocaleTimeString() : '-'}
                       </TableCell>
@@ -945,6 +1157,161 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
             </p>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="rounded-md border bg-slate-50 p-3 space-y-3">
+              <div className="text-xs font-medium text-slate-700">Attendance calendar update (date-wise)</div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Date</Label>
+                  <Input
+                    type="date"
+                    className="bg-white w-[160px]"
+                    value={adminStatusDate}
+                    onChange={(e) => setAdminStatusDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1 min-w-[240px]">
+                  <Label className="text-xs">Apply to</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={adminStatusTargetType === 'team' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => {
+                        setAdminStatusTargetType('team');
+                        setAdminStatusSelectedLabourIds([]);
+                      }}
+                    >
+                      Team member
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={adminStatusTargetType === 'field' ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => {
+                        setAdminStatusTargetType('field');
+                        setAdminStatusSelectedUserIds([]);
+                      }}
+                    >
+                      Field staff (manpower)
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-1 min-w-[220px]">
+                  <Label className="text-xs">Attendance status</Label>
+                  <Select value={adminStatusCode} onValueChange={(v) => setAdminStatusCode(v as AttendanceStatusCode)}>
+                    <SelectTrigger className="bg-white w-[220px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      {ATTENDANCE_STATUS_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.code} value={opt.code}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={adminStatusSearch}
+                  onChange={(e) => setAdminStatusSearch(e.target.value)}
+                  className="bg-white w-[280px]"
+                  placeholder={adminStatusTargetType === 'team' ? 'Search team member...' : 'Search field staff...'}
+                />
+                {adminStatusTargetType === 'team' ? (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAdminStatusSelectedUserIds(statusTeamOptions.map((x) => x.user_id))}
+                    >
+                      Select visible
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setAdminStatusSelectedUserIds([])}>
+                      Clear
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      Selected: {adminStatusSelectedUserIds.length}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAdminStatusSelectedLabourIds(statusFieldOptions.map((x) => String(x.id)))}
+                    >
+                      Select visible
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setAdminStatusSelectedLabourIds([])}>
+                      Clear
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      Selected: {adminStatusSelectedLabourIds.length}
+                    </span>
+                  </>
+                )}
+              </div>
+              <div className="max-h-44 overflow-y-auto rounded-md border bg-white p-2 space-y-1">
+                {adminStatusTargetType === 'team' ? (
+                  statusTeamOptions.length === 0 ? (
+                    <div className="text-xs text-muted-foreground px-2 py-1">No team members found.</div>
+                  ) : (
+                    statusTeamOptions.map((n) => {
+                      const checked = adminStatusSelectedUserIds.includes(n.user_id);
+                      return (
+                        <label key={n.user_id} className="flex items-center gap-2 text-sm px-2 py-1 hover:bg-slate-50 rounded cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => {
+                              const isChecked = e.target.checked;
+                              setAdminStatusSelectedUserIds((prev) =>
+                                isChecked ? [...prev, n.user_id] : prev.filter((x) => x !== n.user_id)
+                              );
+                            }}
+                          />
+                          <span>{n.full_name || n.user_id.slice(0, 8) + '…'}</span>
+                        </label>
+                      );
+                    })
+                  )
+                ) : statusFieldOptions.length === 0 ? (
+                  <div className="text-xs text-muted-foreground px-2 py-1">No field staff found.</div>
+                ) : (
+                  statusFieldOptions.map((l) => {
+                    const key = String(l.id);
+                    const checked = adminStatusSelectedLabourIds.includes(key);
+                    return (
+                      <label key={l.id} className="flex items-center gap-2 text-sm px-2 py-1 hover:bg-slate-50 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const isChecked = e.target.checked;
+                            setAdminStatusSelectedLabourIds((prev) =>
+                              isChecked ? [...prev, key] : prev.filter((x) => x !== key)
+                            );
+                          }}
+                        />
+                        <span>{l.name}</span>
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button type="button" onClick={saveAdminAttendanceStatus} disabled={adminStatusSaving}>
+                  {adminStatusSaving ? 'Saving…' : 'Save status for selected'}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Only one target type can be selected at a time.
+                </span>
+              </div>
+            </div>
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1 min-w-[200px]">
                 <Label className="text-xs">Team member</Label>
@@ -1026,6 +1393,9 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
                     <TableRow>
                       <TableHead>Date</TableHead>
                       <TableHead>Person</TableHead>
+                      <TableHead>Assigned projects</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Login</TableHead>
                       <TableHead>Check in</TableHead>
                       <TableHead>Check out</TableHead>
                       <TableHead className="text-center">In GPS</TableHead>
@@ -1044,6 +1414,15 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
                       >
                         <TableCell className="font-medium whitespace-nowrap">{r.work_date}</TableCell>
                         <TableCell className="text-sm">{rowSubjectLabel(r)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground max-w-[240px]" title={rowAssignedProjects(r)}>
+                          {rowAssignedProjects(r)}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                          {attendanceStatusLabel(r.attendance_status)}
+                        </TableCell>
+                        <TableCell className={`text-xs whitespace-nowrap ${rowLoginStatus(r) === 'NO LOGIN' ? 'text-red-600 font-medium' : 'text-muted-foreground'}`}>
+                          {rowLoginStatus(r)}
+                        </TableCell>
                         <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                           {r.check_in_at ? new Date(r.check_in_at).toLocaleString() : '—'}
                         </TableCell>

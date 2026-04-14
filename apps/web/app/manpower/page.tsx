@@ -12,8 +12,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Pencil, UserCheck, Building2, Users, ToggleLeft, ToggleRight, HardHat, ClipboardList } from 'lucide-react';
+import { Plus, Pencil, UserCheck, Building2, Users, ToggleLeft, ToggleRight, HardHat, ClipboardList, FolderKanban } from 'lucide-react';
 import ManpowerPayslipsPanel from '@/components/manpower/ManpowerPayslipsPanel';
+import { normalizePhoneDigits } from '@/lib/phone';
 
 type RegistryEntry = {
   id: number;
@@ -25,6 +26,11 @@ type RegistryEntry = {
   notes: string | null;
   is_active: boolean;
   created_at: string;
+};
+
+type ProjectOption = {
+  project_id: number;
+  project_name: string;
 };
 
 const EMPTY_FORM = {
@@ -45,6 +51,13 @@ export default function ManpowerPage() {
   const [mainTab, setMainTab] = useState<'registry' | 'payslips'>('registry');
   const [activeTab, setActiveTab] = useState<'in-house' | 'outsourced'>('in-house');
   const [form, setForm] = useState(EMPTY_FORM);
+  const [projects, setProjects] = useState<ProjectOption[]>([]);
+  const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+  const [projectTarget, setProjectTarget] = useState<RegistryEntry | null>(null);
+  const [selectedProjectIds, setSelectedProjectIds] = useState<number[]>([]);
+  const [alreadyAssignedProjectIds, setAlreadyAssignedProjectIds] = useState<number[]>([]);
+  const [savingProjects, setSavingProjects] = useState(false);
+  const [labourHasLoginById, setLabourHasLoginById] = useState<Record<number, boolean>>({});
 
   const fetch = async () => {
     setLoading(true);
@@ -53,11 +66,61 @@ export default function ManpowerPage() {
       .select('*')
       .order('name');
     if (error) { toast.error('Failed to load: ' + error.message); }
-    else { setEntries((data || []) as RegistryEntry[]); }
+    else {
+      const rows = (data || []) as RegistryEntry[];
+      setEntries(rows);
+      const labourIds = rows.map((r) => r.id);
+      if (labourIds.length === 0) {
+        setLabourHasLoginById({});
+      } else {
+        const [{ data: profiles }, { data: linkedPmRows }] = await Promise.all([
+          supabase.from('profiles').select('phone'),
+          supabase
+            .from('project_manpower')
+            .select('labour_id, team_member_id')
+            .in('labour_id', labourIds)
+            .not('team_member_id', 'is', null),
+        ]);
+        const profilePhones = new Set(
+          (profiles || [])
+            .map((p: { phone?: string | null }) => normalizePhoneDigits(p.phone || null))
+            .filter(Boolean)
+        );
+        const linkedLabourIds = new Set(
+          (linkedPmRows || [])
+            .map((r: { labour_id?: number | null }) => r.labour_id)
+            .filter((x): x is number => x != null && Number.isFinite(Number(x)))
+        );
+        const nextMap: Record<number, boolean> = {};
+        rows.forEach((r) => {
+          const norm = normalizePhoneDigits(r.phone || null);
+          nextMap[r.id] = linkedLabourIds.has(r.id) || (!!norm && profilePhones.has(norm));
+        });
+        setLabourHasLoginById(nextMap);
+      }
+    }
     setLoading(false);
   };
 
-  useEffect(() => { fetch(); }, []);
+  const fetchProjects = async (): Promise<ProjectOption[]> => {
+    const { data, error } = await supabase
+      .from('projects')
+      .select('project_id, project_name')
+      .order('project_name');
+    if (error) {
+      toast.error('Failed to load projects: ' + error.message);
+      setProjects([]);
+      return [];
+    }
+    const rows = (data || []) as ProjectOption[];
+    setProjects(rows);
+    return rows;
+  };
+
+  useEffect(() => {
+    void fetch();
+    void fetchProjects();
+  }, []);
 
   const inHouse    = entries.filter(e => e.labour_type === 'In-House');
   const outsourced = entries.filter(e => e.labour_type === 'Outsourced');
@@ -138,6 +201,94 @@ export default function ManpowerPage() {
     setEntries(prev => prev.map(r => r.id === e.id ? { ...r, is_active: !r.is_active } : r));
   };
 
+  const openProjectAssignment = async (entry: RegistryEntry) => {
+    if (labourHasLoginById[entry.id]) {
+      toast.error('This manpower has login. Assign project from Team/Access Management.');
+      return;
+    }
+    setProjectTarget(entry);
+    setIsProjectDialogOpen(true);
+    try {
+      let availableProjects = projects;
+      if (availableProjects.length === 0) {
+        availableProjects = await fetchProjects();
+      }
+      const { data, error } = await supabase
+        .from('project_manpower')
+        .select('project_id')
+        .eq('labour_id', entry.id);
+      if (error) throw error;
+      const uniqueProjectIds = Array.from(
+        new Set(
+          (data || [])
+            .map((r: { project_id?: number | null }) => r.project_id)
+            .filter((x): x is number => x != null && Number.isFinite(Number(x)))
+        )
+      );
+      setAlreadyAssignedProjectIds(uniqueProjectIds);
+      setSelectedProjectIds(uniqueProjectIds);
+      if (availableProjects.length === 0 && uniqueProjectIds.length > 0) {
+        // Fallback: keep currently assigned projects visible in the picker
+        setProjects(uniqueProjectIds.map((id) => ({ project_id: id, project_name: `Project #${id}` })));
+      }
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to load assigned projects');
+      setAlreadyAssignedProjectIds([]);
+      setSelectedProjectIds([]);
+    }
+  };
+
+  const saveProjectAssignment = async () => {
+    if (!projectTarget) return;
+    setSavingProjects(true);
+    try {
+      const { data: existingRows, error: existingErr } = await supabase
+        .from('project_manpower')
+        .select('project_id')
+        .eq('labour_id', projectTarget.id);
+      if (existingErr) throw existingErr;
+
+      const existingProjectIds = new Set(
+        (existingRows || [])
+          .map((r: { project_id?: number | null }) => r.project_id)
+          .filter((x): x is number => x != null && Number.isFinite(Number(x)))
+      );
+      const toInsert = selectedProjectIds
+        .filter((pid) => !existingProjectIds.has(pid))
+        .map((pid) => ({
+          project_id: pid,
+          labour_id: projectTarget.id,
+          labor_type: projectTarget.labour_type,
+          labour_type: projectTarget.labour_type,
+          role: projectTarget.designation || projectTarget.name || 'Field staff',
+          headcount: 1,
+        }));
+      const toRemove = Array.from(existingProjectIds).filter((pid) => !selectedProjectIds.includes(pid));
+
+      if (toInsert.length > 0) {
+        const { error: insErr } = await supabase.from('project_manpower').insert(toInsert);
+        if (insErr) throw insErr;
+      }
+      if (toRemove.length > 0) {
+        const { error: delErr } = await supabase
+          .from('project_manpower')
+          .delete()
+          .eq('labour_id', projectTarget.id)
+          .in('project_id', toRemove);
+        if (delErr) throw delErr;
+      }
+      toast.success(`Assignments updated: +${toInsert.length}, -${toRemove.length}`);
+      setIsProjectDialogOpen(false);
+      setProjectTarget(null);
+      setSelectedProjectIds([]);
+      setAlreadyAssignedProjectIds([]);
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to assign projects');
+    } finally {
+      setSavingProjects(false);
+    }
+  };
+
   const RegistryTable = ({ rows }: { rows: RegistryEntry[] }) => (
     rows.length === 0 ? (
       <div className="py-12 text-center text-muted-foreground text-sm">
@@ -153,7 +304,7 @@ export default function ManpowerPage() {
             <TableHead className="w-[120px]">Phone</TableHead>
             <TableHead>Notes</TableHead>
             <TableHead className="w-[90px]">Status</TableHead>
-            <TableHead className="w-[130px] text-right">Actions</TableHead>
+            <TableHead className="w-[210px] text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -175,6 +326,16 @@ export default function ManpowerPage() {
               </TableCell>
               <TableCell className="text-right">
                 <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openProjectAssignment(e)}
+                    title={labourHasLoginById[e.id] ? 'Has login: use Team/Access Management' : 'Assign projects'}
+                    disabled={labourHasLoginById[e.id]}
+                  >
+                    <FolderKanban className="h-3.5 w-3.5 mr-1" />
+                    {labourHasLoginById[e.id] ? 'Team access' : 'Projects'}
+                  </Button>
                   <Button variant="outline" size="sm" onClick={() => openEdit(e)} title="Edit">
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -282,6 +443,80 @@ export default function ManpowerPage() {
       </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog
+        open={isProjectDialogOpen}
+        onOpenChange={(open) => {
+          setIsProjectDialogOpen(open);
+          if (!open) {
+            setProjectTarget(null);
+            setSelectedProjectIds([]);
+            setAlreadyAssignedProjectIds([]);
+          }
+        }}
+      >
+        <DialogContent className="bg-white max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FolderKanban className="h-5 w-5" />
+              Assign Projects
+            </DialogTitle>
+            <DialogDescription>
+              {projectTarget
+                ? `Assign one or more projects to ${projectTarget.name}. A single person can be assigned to multiple projects.`
+                : 'Select projects to assign.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setSelectedProjectIds(projects.map((p) => p.project_id))}>
+                Select all
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => setSelectedProjectIds([])}>
+                Clear
+              </Button>
+              <span className="text-xs text-muted-foreground">Already assigned: {alreadyAssignedProjectIds.length}</span>
+              <span className="text-xs text-muted-foreground">Selected: {selectedProjectIds.length}</span>
+            </div>
+            <div className="max-h-[360px] overflow-y-auto rounded-md border p-2 space-y-1">
+              {projects.length === 0 ? (
+                <div className="text-sm text-muted-foreground px-2 py-1">
+                  No projects found. Refresh page once; if this persists, check project read access/policies for your role.
+                </div>
+              ) : (
+                projects.map((p) => {
+                  const isAlreadyAssigned = alreadyAssignedProjectIds.includes(p.project_id);
+                  const checked = selectedProjectIds.includes(p.project_id);
+                  return (
+                    <label key={p.project_id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-slate-50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(e) => {
+                          const isChecked = e.target.checked;
+                          setSelectedProjectIds((prev) =>
+                            isChecked ? [...prev, p.project_id] : prev.filter((x) => x !== p.project_id)
+                          );
+                        }}
+                      />
+                      <span className="text-sm">
+                        {p.project_name}
+                        {isAlreadyAssigned ? ' (already assigned)' : ''}
+                      </span>
+                    </label>
+                  );
+                })
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsProjectDialogOpen(false)}>Cancel</Button>
+            <Button onClick={saveProjectAssignment} disabled={savingProjects}>
+              {savingProjects ? 'Saving...' : 'Save assignments'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isOpen} onOpenChange={(o) => { setIsOpen(o); if (!o) { setEditing(null); resetForm(); } }}>
         <DialogContent className="bg-white max-w-lg">

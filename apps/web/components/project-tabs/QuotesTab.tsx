@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Copy, ExternalLink, Mail, Percent, Plus, Pencil, Trash2 } from "lucide-react";
+import { Copy, Download, ExternalLink, Mail, Percent, Plus, Pencil, Trash2 } from "lucide-react";
 
 type ProjectQuote = {
   id?: number;
@@ -52,6 +52,19 @@ type QuoteItem = {
   updated_at: string;
 };
 
+type FinalQuotationFile = {
+  id?: number;
+  file_id?: number;
+  project_id: number;
+  bucket: string;
+  object_path: string;
+  file_name: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  created_at: string;
+  created_by: string | null;
+};
+
 const STATUS_OPTIONS = ["Draft", "Sent", "Approved", "Rejected"] as const;
 
 function statusBadge(status: string) {
@@ -62,11 +75,35 @@ function statusBadge(status: string) {
   return "bg-slate-100 text-slate-700";
 }
 
-export default function QuotesTab({ projectId }: { projectId: string }) {
+function formatBytes(bytes?: number | null) {
+  if (!bytes || bytes <= 0) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function safeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+export default function QuotesTab({ projectId, role }: { projectId: string; role?: string | null }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
+  const canManageQuotes = role === "Admin" || role === "ProjectManager";
+  const canViewFinalQuotation = role === "Admin" || role === "Client";
+  const canUploadFinalQuotation = role === "Admin";
 
   const [quotes, setQuotes] = useState<ProjectQuote[]>([]);
   const [loading, setLoading] = useState(true);
+  const [finalQuotationFiles, setFinalQuotationFiles] = useState<FinalQuotationFile[]>([]);
+  const [finalFilesLoading, setFinalFilesLoading] = useState(false);
+  const [finalUploadDialogOpen, setFinalUploadDialogOpen] = useState(false);
+  const [finalUploadFile, setFinalUploadFile] = useState<File | null>(null);
+  const [finalUploading, setFinalUploading] = useState(false);
 
   const [isOpen, setIsOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -153,14 +190,124 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
     setLoading(false);
   };
 
+  const fetchFinalQuotationFiles = async () => {
+    if (!Number.isFinite(numericProjectId) || !canViewFinalQuotation) return;
+    setFinalFilesLoading(true);
+    const { data, error } = await supabase
+      .from("project_files")
+      .select("*")
+      .eq("project_id", numericProjectId)
+      .like("object_path", `projects/${numericProjectId}/quotes/final/%`)
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Final quotation files fetch error:", error);
+      toast.error(error.message || "Failed to load final quotation files");
+      setFinalQuotationFiles([]);
+    } else {
+      setFinalQuotationFiles((data || []) as FinalQuotationFile[]);
+    }
+    setFinalFilesLoading(false);
+  };
+
   useEffect(() => {
     fetchQuotes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numericProjectId]);
 
+  useEffect(() => {
+    void fetchFinalQuotationFiles();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [numericProjectId, canViewFinalQuotation]);
+
   const openNew = () => {
     resetForm();
     setIsOpen(true);
+  };
+
+  const handleFinalQuotationUpload = async () => {
+    if (!canUploadFinalQuotation) {
+      toast.error("Only Admin can upload final quotation");
+      return;
+    }
+    if (!finalUploadFile) {
+      toast.error("Choose a file first");
+      return;
+    }
+    if (!Number.isFinite(numericProjectId)) {
+      toast.error("Invalid project");
+      return;
+    }
+    setFinalUploading(true);
+    const bucket = "documents";
+    const path = `projects/${numericProjectId}/quotes/final/${Date.now()}-${safeFileName(finalUploadFile.name)}`;
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData.user?.id ?? null;
+    const { error: uploadError } = await supabase.storage.from(bucket).upload(path, finalUploadFile, {
+      contentType: finalUploadFile.type || undefined,
+      upsert: false,
+    });
+    if (uploadError) {
+      toast.error(uploadError.message || "Failed to upload");
+      setFinalUploading(false);
+      return;
+    }
+    const { error: dbError } = await supabase.from("project_files").insert([
+      {
+        project_id: numericProjectId,
+        bucket,
+        object_path: path,
+        file_url: `${bucket}/${path}`,
+        file_name: finalUploadFile.name,
+        mime_type: finalUploadFile.type || null,
+        size_bytes: finalUploadFile.size || null,
+        created_by: userId,
+      },
+    ]);
+    if (dbError) {
+      toast.error(dbError.message || "Uploaded, but failed to save metadata");
+    } else {
+      toast.success("Final quotation uploaded");
+      setFinalUploadDialogOpen(false);
+      setFinalUploadFile(null);
+      await fetchFinalQuotationFiles();
+    }
+    setFinalUploading(false);
+  };
+
+  const handleFinalQuotationDownload = async (f: FinalQuotationFile) => {
+    const { data, error } = await supabase.storage.from(f.bucket).createSignedUrl(f.object_path, 60);
+    if (error) {
+      toast.error(error.message || "Failed to generate download link");
+      return;
+    }
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const handleFinalQuotationDelete = async (f: FinalQuotationFile) => {
+    if (!canUploadFinalQuotation) return;
+    if (!confirm(`Delete "${f.file_name}"?`)) return;
+    const { error: storageError } = await supabase.storage.from(f.bucket).remove([f.object_path]);
+    if (storageError) {
+      toast.error(storageError.message || "Failed to delete from storage");
+      return;
+    }
+    const key =
+      typeof f.id === "number"
+        ? { column: "id", value: f.id }
+        : typeof f.file_id === "number"
+          ? { column: "file_id", value: f.file_id }
+          : null;
+    if (!key) {
+      await fetchFinalQuotationFiles();
+      return;
+    }
+    const { error: dbError } = await supabase.from("project_files").delete().eq(key.column, key.value);
+    if (dbError) {
+      toast.error(dbError.message || "Deleted from storage, but failed to delete metadata");
+    } else {
+      toast.success("Final quotation deleted");
+      await fetchFinalQuotationFiles();
+    }
   };
 
   const openEdit = (q: ProjectQuote) => {
@@ -516,6 +663,94 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-4">
+      {canViewFinalQuotation && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-lg">Final Quotation Uploads</CardTitle>
+              <div className="text-sm text-muted-foreground mt-1">Visibility: Client and Admin</div>
+            </div>
+            {canUploadFinalQuotation && (
+              <Dialog
+                open={finalUploadDialogOpen}
+                onOpenChange={(open) => {
+                  setFinalUploadDialogOpen(open);
+                  if (!open) setFinalUploadFile(null);
+                }}
+              >
+                <DialogTrigger asChild>
+                  <Button className="bg-blue-600 text-white hover:bg-blue-700 h-9">
+                    <Plus className="h-4 w-4 mr-2" /> Upload Final Quotation
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="bg-white">
+                  <DialogHeader>
+                    <DialogTitle>Upload Final Quotation</DialogTitle>
+                    <DialogDescription>This file is intended for Client and Admin visibility in Quotes.</DialogDescription>
+                  </DialogHeader>
+                  <div className="py-2 space-y-3">
+                    <Input type="file" onChange={(e) => setFinalUploadFile(e.target.files?.[0] ?? null)} className="bg-white" />
+                    {finalUploadFile ? (
+                      <div className="text-sm text-slate-600">
+                        {finalUploadFile.name} • {formatBytes(finalUploadFile.size)}
+                      </div>
+                    ) : null}
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setFinalUploadDialogOpen(false)}>
+                      Cancel
+                    </Button>
+                    <Button onClick={handleFinalQuotationUpload} disabled={finalUploading} className="bg-blue-600 text-white hover:bg-blue-700">
+                      {finalUploading ? "Uploading..." : "Upload"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+          </CardHeader>
+          <CardContent>
+            {finalFilesLoading ? (
+              <div className="text-sm text-muted-foreground">Loading final quotations...</div>
+            ) : finalQuotationFiles.length === 0 ? (
+              <div className="text-sm text-muted-foreground">No final quotation uploaded yet.</div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>File</TableHead>
+                    <TableHead className="w-[120px]">Size</TableHead>
+                    <TableHead className="w-[220px]">Uploaded</TableHead>
+                    <TableHead className="w-[140px] text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {finalQuotationFiles.map((f, idx) => (
+                    <TableRow key={String(f.id ?? f.file_id ?? idx)} className="hover:bg-slate-50">
+                      <TableCell className="font-medium">{f.file_name}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{formatBytes(f.size_bytes)}</TableCell>
+                      <TableCell className="text-sm text-slate-700">{new Date(f.created_at).toLocaleString()}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" size="sm" onClick={() => handleFinalQuotationDownload(f)}>
+                            <Download className="h-4 w-4" />
+                          </Button>
+                          {canUploadFinalQuotation && (
+                            <Button variant="outline" size="sm" onClick={() => handleFinalQuotationDelete(f)}>
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {canManageQuotes && (
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -696,7 +931,9 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
           )}
         </CardContent>
       </Card>
+      )}
 
+      {canManageQuotes && (
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent className="bg-white max-w-5xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
@@ -892,6 +1129,7 @@ export default function QuotesTab({ projectId }: { projectId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
     </div>
   );
 }

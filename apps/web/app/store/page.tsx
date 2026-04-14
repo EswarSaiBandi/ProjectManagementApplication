@@ -80,6 +80,7 @@ interface StockEntryLog {
   log_id: number;
   material_id: number;
   variant_id: number | null;
+  movement_type: string;
   quantity: number;
   number_of_units: number | null;
   notes: string | null;
@@ -90,6 +91,10 @@ interface StockEntryLog {
 }
 
 const STOCK_META_PREFIX = '[STOCK_META]';
+
+function safeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_');
+}
 
 export default function StorePage() {
   const [materials, setMaterials] = useState<Material[]>([]);
@@ -116,6 +121,7 @@ export default function StorePage() {
     amount_per_unit: '',
     gst: ''
   });
+  const [stockBillFile, setStockBillFile] = useState<File | null>(null);
   const [reductionForm, setReductionForm] = useState({
     material_id: null as number | null,
     variant_id: null as number | null,
@@ -254,6 +260,7 @@ export default function StorePage() {
         log_id,
         material_id,
         variant_id,
+        movement_type,
         quantity,
         number_of_units,
         notes,
@@ -261,7 +268,7 @@ export default function StorePage() {
         materials_master!inner(material_name, metric),
         material_variants(variant_name)
       `)
-      .eq('movement_type', 'Store In')
+      .in('movement_type', ['Store In', 'Store Out'])
       .in('reference_type', ['Initial Stock', 'Manual Adjustment'])
       .order('movement_date', { ascending: false })
       .limit(200);
@@ -281,13 +288,16 @@ export default function StorePage() {
     setStockEntryLogs(logsWithDetails);
   };
 
-  const buildStockEntryNotes = () => {
+  const buildStockEntryNotes = (billMeta?: { billPath: string; billFileName: string; billBucket: string } | null) => {
     const meta = {
       poDate: inventoryForm.purchase_order_date || '',
       invoiceNumber: inventoryForm.invoice_number.trim(),
       amountPerUnit: inventoryForm.amount_per_unit.trim(),
       gst: inventoryForm.gst.trim(),
-      remarks: inventoryForm.notes.trim()
+      remarks: inventoryForm.notes.trim(),
+      billPath: billMeta?.billPath || '',
+      billFileName: billMeta?.billFileName || '',
+      billBucket: billMeta?.billBucket || ''
     };
 
     const hasDetails = Object.values(meta).some((value) => value.length > 0);
@@ -310,7 +320,10 @@ export default function StorePage() {
         invoiceNumber: '-',
         amountPerUnit: '-',
         gst: '-',
-        remarks: '-'
+        remarks: '-',
+        billPath: '',
+        billFileName: '',
+        billBucket: 'documents'
       };
     }
 
@@ -326,6 +339,9 @@ export default function StorePage() {
           amountPerUnit?: string;
           gst?: string;
           remarks?: string;
+          billPath?: string;
+          billFileName?: string;
+          billBucket?: string;
         };
 
         return {
@@ -333,7 +349,10 @@ export default function StorePage() {
           invoiceNumber: meta.invoiceNumber?.trim() || '-',
           amountPerUnit: meta.amountPerUnit?.trim() || '-',
           gst: meta.gst?.trim() || '-',
-          remarks: meta.remarks?.trim() || '-'
+          remarks: meta.remarks?.trim() || '-',
+          billPath: meta.billPath?.trim() || '',
+          billFileName: meta.billFileName?.trim() || '',
+          billBucket: meta.billBucket?.trim() || 'documents'
         };
       } catch {
         // Fall back to legacy tag parsing if metadata is malformed.
@@ -358,7 +377,10 @@ export default function StorePage() {
       invoiceNumber: invoiceNumber || '-',
       amountPerUnit: amountPerUnit || '-',
       gst: gst || '-',
-      remarks: remarks || '-'
+      remarks: remarks || '-',
+      billPath: '',
+      billFileName: '',
+      billBucket: 'documents'
     };
   };
 
@@ -372,11 +394,29 @@ export default function StorePage() {
         toast.error('Please enter valid number of units');
         return;
       }
+      if (!stockBillFile) {
+        toast.error('Bill upload is mandatory while adding stock');
+        return;
+      }
 
       const variant = variants.find(v => v.variant_id === inventoryForm.variant_id);
       const units = parseFloat(inventoryForm.number_of_units);
       const totalQuantity = variant ? units * variant.quantity_per_unit : 0;
-      const stockNotes = buildStockEntryNotes();
+      const billBucket = 'documents';
+      const billPath = `store/stock-bills/${Date.now()}-${safeFileName(stockBillFile.name)}`;
+      const { error: billUploadError } = await supabase.storage
+        .from(billBucket)
+        .upload(billPath, stockBillFile, {
+          contentType: stockBillFile.type || undefined,
+          upsert: false
+        });
+      if (billUploadError) throw billUploadError;
+
+      const stockNotes = buildStockEntryNotes({
+        billPath,
+        billFileName: stockBillFile.name,
+        billBucket
+      });
 
       const payload = {
         material_id: inventoryForm.material_id,
@@ -728,6 +768,7 @@ export default function StorePage() {
       amount_per_unit: '',
       gst: ''
     });
+    setStockBillFile(null);
   };
 
   const openNewInventory = () => {
@@ -771,6 +812,25 @@ export default function StorePage() {
 
   const totalPrice = basePrice + gstAmount;
   const selectedStockEntryDetails = selectedStockLog ? parseStockEntryNotes(selectedStockLog.notes) : null;
+
+  const openBillForLog = async (log: StockEntryLog) => {
+    const parsed = parseStockEntryNotes(log.notes);
+    if (!parsed.billPath) {
+      toast.error('No bill attached for this stock entry');
+      return;
+    }
+    const { data, error } = await supabase
+      .storage
+      .from(parsed.billBucket || 'documents')
+      .createSignedUrl(parsed.billPath, 60);
+    if (error) {
+      toast.error(error.message || 'Failed to open bill');
+      return;
+    }
+    if (data?.signedUrl) {
+      window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
 
   if (loading) {
     return (
@@ -818,7 +878,13 @@ export default function StorePage() {
                     <Package className="h-5 w-5 text-blue-600" />
                     Store Inventory
                   </CardTitle>
-                  <Dialog open={isInventoryDialogOpen} onOpenChange={setIsInventoryDialogOpen}>
+                  <Dialog
+                    open={isInventoryDialogOpen}
+                    onOpenChange={(open) => {
+                      setIsInventoryDialogOpen(open);
+                      if (!open) setStockBillFile(null);
+                    }}
+                  >
                     <DialogTrigger asChild>
                       <Button onClick={openNewInventory} className="bg-blue-600 hover:bg-blue-700">
                         <Plus className="h-4 w-4 mr-2" /> Add Stock
@@ -959,6 +1025,23 @@ export default function StorePage() {
                           />
                         </div>
 
+                        <div className="space-y-2">
+                          <Label>Bill Upload * (mandatory)</Label>
+                          <Input
+                            type="file"
+                            accept=".pdf,.jpg,.jpeg,.png,.webp"
+                            onChange={(e) => setStockBillFile(e.target.files?.[0] ?? null)}
+                            className="bg-white"
+                          />
+                          {stockBillFile ? (
+                            <p className="text-xs text-slate-600">
+                              Selected bill: <span className="font-medium">{stockBillFile.name}</span>
+                            </p>
+                          ) : (
+                            <p className="text-xs text-amber-700">You must upload bill before saving stock entry.</p>
+                          )}
+                        </div>
+
                         {(validUnitsForPrice > 0 || validAmountPerUnitForPrice > 0 || gstInput) && (
                           <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 space-y-1">
                             <div className="text-sm text-slate-700">
@@ -980,7 +1063,7 @@ export default function StorePage() {
                         )}
 
                         <div className="flex gap-2 pt-4">
-                          <Button onClick={handleSaveInventory} className="flex-1 bg-blue-600 hover:bg-blue-700">
+                          <Button onClick={handleSaveInventory} disabled={!stockBillFile} className="flex-1 bg-blue-600 hover:bg-blue-700">
                             {inventoryForm.inventory_id ? 'Update' : 'Add'}
                           </Button>
                           <Button
@@ -1158,6 +1241,7 @@ export default function StorePage() {
                     <thead className="bg-slate-50 border-b">
                       <tr>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Date</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Type</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Material</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Variant</th>
                         <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units</th>
@@ -1166,13 +1250,14 @@ export default function StorePage() {
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Invoice</th>
                         <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Amount/Unit</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">GST</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Bill</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Remarks</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       {stockEntryLogs.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={12} className="px-4 py-8 text-center text-slate-500">
                             No stock entry logs found
                           </td>
                         </tr>
@@ -1200,17 +1285,41 @@ export default function StorePage() {
                               <td className="px-4 py-3 text-sm text-slate-900">
                                 {new Date(log.movement_date).toLocaleString()}
                               </td>
+                              <td className="px-4 py-3 text-sm">
+                                <Badge className={log.movement_type === 'Store Out' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}>
+                                  {log.movement_type}
+                                </Badge>
+                              </td>
                               <td className="px-4 py-3 text-sm font-medium text-slate-900">{log.material_name}</td>
                               <td className="px-4 py-3 text-sm text-slate-600">{log.variant_name || '-'}</td>
                               <td className="px-4 py-3 text-sm text-right text-slate-900">{log.number_of_units ?? '-'}</td>
                               <td className="px-4 py-3 text-sm text-right">
-                                <span className="font-semibold text-slate-900">{log.quantity}</span>
+                                <span className={`font-semibold ${log.movement_type === 'Store Out' ? 'text-red-700' : 'text-slate-900'}`}>
+                                  {log.movement_type === 'Store Out' ? '-' : ''}
+                                  {log.quantity}
+                                </span>
                                 <span className="text-slate-500 ml-1">{log.metric}</span>
                               </td>
                               <td className="px-4 py-3 text-sm text-slate-600">{parsed.poDate}</td>
                               <td className="px-4 py-3 text-sm text-slate-600">{parsed.invoiceNumber}</td>
                               <td className="px-4 py-3 text-sm text-right text-slate-600">{parsed.amountPerUnit}</td>
                               <td className="px-4 py-3 text-sm text-slate-600">{parsed.gst}</td>
+                              <td className="px-4 py-3 text-sm text-slate-600">
+                                {parsed.billPath ? (
+                                  <button
+                                    type="button"
+                                    className="text-blue-600 hover:underline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void openBillForLog(log);
+                                    }}
+                                  >
+                                    {parsed.billFileName || 'Open bill'}
+                                  </button>
+                                ) : (
+                                  '-'
+                                )}
+                              </td>
                               <td className="px-4 py-3 text-sm text-slate-600 max-w-xs truncate">{parsed.remarks}</td>
                             </tr>
                           );
@@ -1237,6 +1346,10 @@ export default function StorePage() {
                       <div>
                         <p className="text-slate-500">Material</p>
                         <p className="font-medium text-slate-900">{selectedStockLog.material_name || '-'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Movement Type</p>
+                        <p className="font-medium text-slate-900">{selectedStockLog.movement_type}</p>
                       </div>
                       <div>
                         <p className="text-slate-500">Variant</p>
@@ -1267,6 +1380,20 @@ export default function StorePage() {
                       <div>
                         <p className="text-slate-500">GST</p>
                         <p className="font-medium text-slate-900">{selectedStockEntryDetails.gst}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Bill</p>
+                        {selectedStockEntryDetails.billPath ? (
+                          <button
+                            type="button"
+                            className="font-medium text-blue-600 hover:underline"
+                            onClick={() => void openBillForLog(selectedStockLog)}
+                          >
+                            {selectedStockEntryDetails.billFileName || 'Open bill'}
+                          </button>
+                        ) : (
+                          <p className="font-medium text-slate-900">-</p>
+                        )}
                       </div>
                     </div>
 
