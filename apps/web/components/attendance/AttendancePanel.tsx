@@ -196,6 +196,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   const [adminLabourPicklist, setAdminLabourPicklist] = useState<LabourPickOption[]>([]);
   const [labourNameById, setLabourNameById] = useState<Record<number, string>>({});
   const [labourProjectsById, setLabourProjectsById] = useState<Record<number, string[]>>({});
+  const [userProjectsById, setUserProjectsById] = useState<Record<string, string[]>>({});
   const [adminStatusDate, setAdminStatusDate] = useState(() => getLocalISODate());
   const [adminStatusCode, setAdminStatusCode] = useState<AttendanceStatusCode>('WORKING');
   const [adminStatusTargetType, setAdminStatusTargetType] = useState<'team' | 'field'>('team');
@@ -239,6 +240,10 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   };
 
   const rowAssignedProjects = (row: AttendanceLog) => {
+    if (row.user_id) {
+      const names = userProjectsById[row.user_id] || [];
+      return names.length > 0 ? names.join(', ') : 'Unassigned';
+    }
     if (row.labour_id == null) return '—';
     const names = labourProjectsById[row.labour_id] || [];
     return names.length > 0 ? names.join(', ') : 'Unassigned';
@@ -717,6 +722,71 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       } catch (e) {
         console.error(e);
         setLabourProjectsById({});
+      }
+    })();
+  }, [adminAttRows, adminCalendarRows, showStaffReportBlock]);
+
+  useEffect(() => {
+    if (!showStaffReportBlock) return;
+    const userIds = Array.from(
+      new Set(
+        [...adminAttRows, ...adminCalendarRows]
+          .map((r) => r.user_id)
+          .filter((x): x is string => !!x)
+      )
+    );
+    if (userIds.length === 0) {
+      setUserProjectsById({});
+      return;
+    }
+    void (async () => {
+      try {
+        const [{ data: pmembers, error: pmErr }, { data: clientProjects, error: cpErr }] = await Promise.all([
+          supabase.from('project_members').select('user_id, project_id').in('user_id', userIds),
+          supabase.from('projects').select('project_id, project_name, client_id').in('client_id', userIds),
+        ]);
+        if (pmErr) throw pmErr;
+        if (cpErr) throw cpErr;
+
+        const allProjectIds = Array.from(
+          new Set(
+            [
+              ...(pmembers || []).map((r: { project_id: number }) => r.project_id),
+              ...(clientProjects || []).map((r: { project_id: number }) => r.project_id),
+            ].filter((x): x is number => x != null && Number.isFinite(Number(x)))
+          )
+        );
+        const projectNameById: Record<number, string> = {};
+        if (allProjectIds.length > 0) {
+          const { data: prows } = await supabase.from('projects').select('project_id, project_name').in('project_id', allProjectIds);
+          (prows || []).forEach((p: { project_id: number; project_name: string }) => {
+            projectNameById[p.project_id] = p.project_name;
+          });
+        }
+
+        const mapping: Record<string, string[]> = {};
+        userIds.forEach((uid) => {
+          mapping[uid] = [];
+        });
+
+        (pmembers || []).forEach((r: { user_id: string; project_id: number }) => {
+          const name = projectNameById[r.project_id] || `Project #${r.project_id}`;
+          if (!mapping[r.user_id]) mapping[r.user_id] = [];
+          if (!mapping[r.user_id].includes(name)) mapping[r.user_id].push(name);
+        });
+
+        (clientProjects || []).forEach((r: { client_id?: string | null; project_id: number }) => {
+          const uid = r.client_id;
+          if (!uid) return;
+          const name = projectNameById[r.project_id] || `Project #${r.project_id}`;
+          if (!mapping[uid]) mapping[uid] = [];
+          if (!mapping[uid].includes(name)) mapping[uid].push(name);
+        });
+
+        setUserProjectsById(mapping);
+      } catch (e) {
+        console.error(e);
+        setUserProjectsById({});
       }
     })();
   }, [adminAttRows, adminCalendarRows, showStaffReportBlock]);
