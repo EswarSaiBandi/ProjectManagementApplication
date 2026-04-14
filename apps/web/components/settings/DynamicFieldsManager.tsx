@@ -27,6 +27,7 @@ type DynamicOption = {
 const FIELD_TYPES = [
   { value: 'lead_source', label: 'Lead Sources' },
   { value: 'cost_category', label: 'Cost Categories' },
+  { value: 'project_expense_type', label: 'Project Expense Types' },
   { value: 'payment_method', label: 'Payment Methods' },
   { value: 'project_type', label: 'Project Types' },
   { value: 'material_category', label: 'Material Metrics' },
@@ -187,7 +188,15 @@ export default function DynamicFieldsManager() {
                 <Input
                   value={newOption}
                   onChange={(e) => setNewOption(e.target.value)}
-                  placeholder={`e.g., ${activeFieldType === 'lead_source' ? 'LinkedIn' : activeFieldType === 'cost_category' ? 'Transportation' : 'New Option'}`}
+                  placeholder={`e.g., ${
+                    activeFieldType === 'lead_source'
+                      ? 'LinkedIn'
+                      : activeFieldType === 'cost_category'
+                      ? 'Transportation'
+                      : activeFieldType === 'project_expense_type'
+                      ? 'Accommodation'
+                      : 'New Option'
+                  }`}
                   className="bg-white"
                   onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
                 />

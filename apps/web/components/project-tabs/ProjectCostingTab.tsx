@@ -76,8 +76,8 @@ function calcManpowerCost(r: ManpowerCostRow): number {
 }
 
 const fmt = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
-
-const EXPENSE_ONLY_CATEGORIES = ['Travel Expenses', 'Food Costs', 'Others'] as const;
+const STICKY_ACTION_CELL_CLASS =
+  'sticky right-0 z-10 bg-white shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.2)]';
 
 export default function ProjectCostingTab({ projectId }: { projectId: string }) {
   const numericProjectId = useMemo(() => Number(projectId), [projectId]);
@@ -88,6 +88,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const [stockUsedCostActual, setStockUsedCostActual] = useState(0);
   const [hasStockUsedRows, setHasStockUsedRows] = useState(false);
   const [costCategories, setCostCategories] = useState<string[]>([]);
+  const [expenseTypeOptions, setExpenseTypeOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [isBudgetOpen, setIsBudgetOpen] = useState(false);
   const [isExpenseOpen, setIsExpenseOpen] = useState(false);
@@ -104,7 +105,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   });
 
   const [expenseForm, setExpenseForm] = useState({
-    cost_category: 'Travel Expenses',
+    cost_category: '',
     amount: '',
     description: '',
     cost_date: new Date().toISOString().split('T')[0],
@@ -119,10 +120,10 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     [ledgerEntries]
   );
   const budgetCategoryOptions = useMemo(() => {
-    const skip = new Set<string>(EXPENSE_ONLY_CATEGORIES as unknown as string[]);
+    const skip = new Set<string>(expenseTypeOptions);
     const base = costCategories.filter((c) => !skip.has(c));
     return base.length > 0 ? base : ['Material', 'Labor', 'Equipment', 'Overhead', 'Other'];
-  }, [costCategories]);
+  }, [costCategories, expenseTypeOptions]);
 
   const fetchCostingSummary = async () => {
     if (!Number.isFinite(numericProjectId)) return;
@@ -144,7 +145,6 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   };
 
   const fetchCostCategories = async () => {
-    const mandatoryCategories = ['Travel Expenses', 'Food Costs', 'Others'];
     const { data, error } = await supabase
       .from('dynamic_field_options')
       .select('option_value')
@@ -154,11 +154,27 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
     if (!error && data) {
       const fromSettings = data.map(d => d.option_value);
-      const merged = Array.from(new Set([...fromSettings, ...mandatoryCategories]));
-      setCostCategories(merged);
+      setCostCategories(Array.from(new Set(fromSettings)));
     } else {
-      setCostCategories(['Material', 'Labor', 'Equipment', 'Overhead', 'Other', ...mandatoryCategories]);
+      setCostCategories(['Material', 'Labor', 'Equipment', 'Overhead', 'Other']);
     }
+  };
+
+  const fetchExpenseTypeOptions = async () => {
+    const { data, error } = await supabase
+      .from('dynamic_field_options')
+      .select('option_value')
+      .eq('field_type', 'project_expense_type')
+      .eq('is_active', true)
+      .order('display_order');
+
+    if (!error && data) {
+      const fromSettings = data.map((d) => d.option_value).filter(Boolean);
+      setExpenseTypeOptions(Array.from(new Set(fromSettings)));
+      return;
+    }
+
+    setExpenseTypeOptions([]);
   };
 
   const fetchLedgerEntries = async () => {
@@ -236,6 +252,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     fetchCostingSummary();
     fetchLedgerEntries();
     fetchCostCategories();
+    fetchExpenseTypeOptions();
     fetchManpowerCosts();
     fetchStockUsedCost();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -252,7 +269,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
   const resetExpenseForm = () => {
     setExpenseForm({
-      cost_category: 'Travel Expenses',
+      cost_category: expenseTypeOptions[0] ?? '',
       amount: '',
       description: '',
       cost_date: new Date().toISOString().split('T')[0],
@@ -277,6 +294,10 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   };
 
   const openNewExpense = () => {
+    if (expenseTypeOptions.length === 0) {
+      toast.error('No expense types configured. Add them in Settings > Dynamic Field Configuration.');
+      return;
+    }
     setEditingExpense(null);
     resetExpenseForm();
     setIsExpenseOpen(true);
@@ -284,6 +305,9 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
   const openEditExpense = (entry: BudgetEntry) => {
     setEditingExpense(entry);
+    if (entry.cost_category && !expenseTypeOptions.includes(entry.cost_category)) {
+      setExpenseTypeOptions((prev) => [entry.cost_category, ...prev]);
+    }
     setExpenseForm({
       cost_category: entry.cost_category,
       amount: String(entry.amount),
@@ -341,6 +365,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const handleSaveExpense = async () => {
     if (isSavingExpense) return;
     if (!Number.isFinite(numericProjectId)) { toast.error('Invalid project'); return; }
+    if (!expenseForm.cost_category) { toast.error('Expense type is required'); return; }
     const amount = Number(expenseForm.amount);
     if (!amount || amount <= 0) { toast.error('Amount must be greater than 0'); return; }
     if (!expenseForm.cost_date) { toast.error('Date is required'); return; }
@@ -382,6 +407,17 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     await fetchLedgerEntries();
     setIsSavingExpense(false);
   };
+
+  useEffect(() => {
+    if (!expenseTypeOptions.length) return;
+    setExpenseForm((prev) => {
+      if (expenseTypeOptions.includes(prev.cost_category)) return prev;
+      return {
+        ...prev,
+        cost_category: expenseTypeOptions[0],
+      };
+    });
+  }, [expenseTypeOptions]);
 
   const handleDelete = async (entry: BudgetEntry) => {
     const label = entry.cost_type === 'Budgeted' ? 'budget entry' : 'expense';
@@ -431,7 +467,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
           {loading ? (
             <div className="text-center py-8 text-muted-foreground">Loading cost data...</div>
           ) : costSummary ? (
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               {/* Budget vs Actual */}
               <Card>
                 <CardContent className="pt-4">
@@ -477,7 +513,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
         </CardHeader>
         <CardContent>
           {costSummary && (
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card className="bg-blue-50">
                 <CardContent className="pt-4">
                   <div className="flex items-center gap-3">
@@ -552,41 +588,41 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                     <span className="font-semibold text-sm text-blue-700">In-House</span>
                     <span className="ml-auto text-sm font-bold text-blue-700">{fmt(clientInHouseCost)}</span>
                   </div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Designation</TableHead>
-                        <TableHead className="w-[100px]">Bandwidth</TableHead>
-                        <TableHead className="w-[160px]">Period</TableHead>
-                        <TableHead className="w-[70px] text-center">Days</TableHead>
-                        <TableHead className="w-[110px]">Rate/Day</TableHead>
-                        <TableHead className="w-[120px] text-right">Est. Cost</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {inHouseRows.map(r => {
-                        const salary  = r.labour?.monthly_salary ?? 0;
-                        const bw      = r.bandwidth_pct ?? 0;
-                        const rateDay = salary ? (salary / 24) * (bw / 100) : null;
-                        const days    = r.start_date && r.end_date ? workingDays(r.start_date, r.end_date) : null;
-                        const cost    = calcManpowerCost(r);
-                        return (
-                          <TableRow key={r.id}>
-                            <TableCell className="font-medium">{r.labour?.name || '—'}</TableCell>
-                            <TableCell className="text-slate-600 text-sm">{r.labour?.designation || '—'}</TableCell>
-                            <TableCell><Badge className="bg-blue-100 text-blue-700">{bw}%</Badge></TableCell>
-                            <TableCell className="text-sm text-slate-600">
-                              {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN') : '—'} → {r.end_date ? new Date(r.end_date).toLocaleDateString('en-IN') : '—'}
-                            </TableCell>
-                            <TableCell className="text-center text-sm">{days ?? '—'}</TableCell>
-                            <TableCell className="text-sm">{rateDay ? fmt(rateDay) : '—'}</TableCell>
-                            <TableCell className="text-right font-semibold text-blue-700">{cost > 0 ? fmt(cost) : '—'}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-[600px]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="min-w-[120px]">Name</TableHead>
+                          <TableHead className="min-w-[100px]">Designation</TableHead>
+                          <TableHead className="text-center">BW%</TableHead>
+                          <TableHead className="min-w-[140px]">Period</TableHead>
+                          <TableHead className="text-center">Days</TableHead>
+                          <TableHead className="text-right">Est. Cost</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {inHouseRows.map(r => {
+                          const salary  = r.labour?.monthly_salary ?? 0;
+                          const bw      = r.bandwidth_pct ?? 0;
+                          const rateDay = salary ? (salary / 24) * (bw / 100) : null;
+                          const days    = r.start_date && r.end_date ? workingDays(r.start_date, r.end_date) : null;
+                          const cost    = calcManpowerCost(r);
+                          return (
+                            <TableRow key={r.id}>
+                              <TableCell className="font-medium text-sm">{r.labour?.name || '—'}</TableCell>
+                              <TableCell className="text-slate-600 text-xs">{r.labour?.designation || '—'}</TableCell>
+                              <TableCell className="text-center"><Badge className="bg-blue-100 text-blue-700 text-xs">{bw}%</Badge></TableCell>
+                              <TableCell className="text-xs text-slate-600">
+                                {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN', {month: 'short', day: 'numeric'}) : '—'} → {r.end_date ? new Date(r.end_date).toLocaleDateString('en-IN', {month: 'short', day: 'numeric'}) : '—'}
+                              </TableCell>
+                              <TableCell className="text-center text-xs">{days ?? '—'}</TableCell>
+                              <TableCell className="text-right font-semibold text-blue-700 text-sm">{cost > 0 ? fmt(cost) : '—'}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               )}
 
@@ -598,38 +634,38 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                     <span className="font-semibold text-sm text-amber-700">Outsourced</span>
                     <span className="ml-auto text-sm font-bold text-amber-700">{fmt(clientOutsourcedCost)}</span>
                   </div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Designation</TableHead>
-                        <TableHead className="w-[160px]">Period</TableHead>
-                        <TableHead className="w-[70px] text-center">Days</TableHead>
-                        <TableHead className="w-[110px]">Daily Wage</TableHead>
-                        <TableHead className="w-[100px]">Incentive</TableHead>
-                        <TableHead className="w-[120px] text-right">Est. Cost</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {outsourcedRows.map(r => {
-                        const days = r.start_date && r.end_date ? workingDays(r.start_date, r.end_date) : null;
-                        const cost = calcManpowerCost(r);
-                        return (
-                          <TableRow key={r.id}>
-                            <TableCell className="font-medium">{r.labour?.name || '—'}</TableCell>
-                            <TableCell className="text-slate-600 text-sm">{r.labour?.designation || '—'}</TableCell>
-                            <TableCell className="text-sm text-slate-600">
-                              {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN') : '—'} → {r.end_date ? new Date(r.end_date).toLocaleDateString('en-IN') : '—'}
-                            </TableCell>
-                            <TableCell className="text-center text-sm">{days ?? '—'}</TableCell>
-                            <TableCell className="text-sm">{r.daily_wage ? fmt(r.daily_wage) : '—'}</TableCell>
-                            <TableCell className="text-sm">{r.incentive ? fmt(r.incentive) : '—'}</TableCell>
-                            <TableCell className="text-right font-semibold text-amber-700">{cost > 0 ? fmt(cost) : '—'}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-[600px]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="min-w-[120px]">Name</TableHead>
+                          <TableHead className="min-w-[100px]">Designation</TableHead>
+                          <TableHead className="min-w-[140px]">Period</TableHead>
+                          <TableHead className="text-center">Days</TableHead>
+                          <TableHead className="text-right">Wage</TableHead>
+                          <TableHead className="text-right">Est. Cost</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {outsourcedRows.map(r => {
+                          const days = r.start_date && r.end_date ? workingDays(r.start_date, r.end_date) : null;
+                          const cost = calcManpowerCost(r);
+                          return (
+                            <TableRow key={r.id}>
+                              <TableCell className="font-medium text-sm">{r.labour?.name || '—'}</TableCell>
+                              <TableCell className="text-slate-600 text-xs">{r.labour?.designation || '—'}</TableCell>
+                              <TableCell className="text-xs text-slate-600">
+                                {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN', {month: 'short', day: 'numeric'}) : '—'} → {r.end_date ? new Date(r.end_date).toLocaleDateString('en-IN', {month: 'short', day: 'numeric'}) : '—'}
+                              </TableCell>
+                              <TableCell className="text-center text-xs">{days ?? '—'}</TableCell>
+                              <TableCell className="text-right text-xs">{r.daily_wage ? fmt(r.daily_wage) : '—'}{r.incentive ? ` +${fmt(r.incentive)}` : ''}</TableCell>
+                              <TableCell className="text-right font-semibold text-amber-700 text-sm">{cost > 0 ? fmt(cost) : '—'}</TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
                 </div>
               )}
 
@@ -739,33 +775,33 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
               No budget entries yet.
             </div>
           ) : (
-            <Table>
+            <Table className="min-w-[580px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead className="w-[140px]">Amount</TableHead>
+                  <TableHead className="w-[90px]">Date</TableHead>
+                  <TableHead className="w-[120px]">Category</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Description</TableHead>
-                  <TableHead className="w-[100px] text-right">Actions</TableHead>
+                  <TableHead className={`w-[90px] text-right ${STICKY_ACTION_CELL_CLASS}`}>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {budgetRows.map((entry) => (
                   <TableRow key={entry.ledger_id} className="hover:bg-slate-50">
-                    <TableCell className="text-sm">{new Date(entry.cost_date).toLocaleDateString('en-IN')}</TableCell>
+                    <TableCell className="text-xs">{new Date(entry.cost_date).toLocaleDateString('en-IN', {month: 'short', day: 'numeric'})}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{entry.cost_category}</Badge>
+                      <Badge variant="outline" className="text-xs">{entry.cost_category}</Badge>
                     </TableCell>
-                    <TableCell className="font-semibold">₹{Number(entry.amount).toLocaleString('en-IN')}</TableCell>
-                    <TableCell className="text-sm text-slate-600">{entry.description || '—'}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="font-semibold text-sm text-right">₹{Number(entry.amount).toLocaleString('en-IN')}</TableCell>
+                    <TableCell className="text-xs text-slate-600">{entry.description || '—'}</TableCell>
+                    <TableCell className={`text-right ${STICKY_ACTION_CELL_CLASS}`}>
                       <div className="flex justify-end gap-1">
                         <Button
                           variant="outline" size="sm"
                           onClick={() => openEditBudget(entry)}
                           title="Edit"
                         >
-                          <Pencil className="h-3.5 w-3.5" />
+                          <Pencil className="h-3 w-3" />
                         </Button>
                         <Button
                           variant="outline" size="sm"
@@ -773,7 +809,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                           title="Delete"
                           className="text-red-500 hover:bg-red-50 hover:text-red-600"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-3 w-3" />
                         </Button>
                       </div>
                     </TableCell>
@@ -802,7 +838,12 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
             </div>
             <Dialog open={isExpenseOpen} onOpenChange={(o) => { setIsExpenseOpen(o); if (!o) { setEditingExpense(null); resetExpenseForm(); } }}>
               <DialogTrigger asChild>
-                <Button onClick={openNewExpense} variant="outline" className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 h-9">
+                <Button
+                  onClick={openNewExpense}
+                  variant="outline"
+                  disabled={expenseTypeOptions.length === 0}
+                  className="border-emerald-600 text-emerald-700 hover:bg-emerald-50 h-9"
+                >
                   <Plus className="h-4 w-4 mr-2" /> Add Expense
                 </Button>
               </DialogTrigger>
@@ -821,9 +862,15 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="bg-white">
-                          {EXPENSE_ONLY_CATEGORIES.map((category) => (
-                            <SelectItem key={category} value={category}>{category}</SelectItem>
-                          ))}
+                          {expenseTypeOptions.length > 0 ? (
+                            expenseTypeOptions.map((category) => (
+                              <SelectItem key={category} value={category}>{category}</SelectItem>
+                            ))
+                          ) : (
+                            <div className="px-2 py-1.5 text-xs text-slate-500">
+                              No expense types configured in Settings.
+                            </div>
+                          )}
                         </SelectContent>
                       </Select>
                     </div>
@@ -879,33 +926,33 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
               No project expenses recorded yet.
             </div>
           ) : (
-            <Table>
+            <Table className="min-w-[580px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead className="w-[140px]">Amount</TableHead>
+                  <TableHead className="w-[90px]">Date</TableHead>
+                  <TableHead className="w-[120px]">Type</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
                   <TableHead>Description</TableHead>
-                  <TableHead className="w-[100px] text-right">Actions</TableHead>
+                  <TableHead className={`w-[90px] text-right ${STICKY_ACTION_CELL_CLASS}`}>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {expenseRows.map((entry) => (
                   <TableRow key={entry.ledger_id} className="hover:bg-slate-50">
-                    <TableCell className="text-sm">{new Date(entry.cost_date).toLocaleDateString('en-IN')}</TableCell>
+                    <TableCell className="text-xs">{new Date(entry.cost_date).toLocaleDateString('en-IN', {month: 'short', day: 'numeric'})}</TableCell>
                     <TableCell>
-                      <Badge className="bg-emerald-600/10 text-emerald-800 border-emerald-200">{entry.cost_category}</Badge>
+                      <Badge className="bg-emerald-600/10 text-emerald-800 border-emerald-200 text-xs">{entry.cost_category}</Badge>
                     </TableCell>
-                    <TableCell className="font-semibold">₹{Number(entry.amount).toLocaleString('en-IN')}</TableCell>
-                    <TableCell className="text-sm text-slate-600">{entry.description || '—'}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="font-semibold text-sm text-right">₹{Number(entry.amount).toLocaleString('en-IN')}</TableCell>
+                    <TableCell className="text-xs text-slate-600">{entry.description || '—'}</TableCell>
+                    <TableCell className={`text-right ${STICKY_ACTION_CELL_CLASS}`}>
                       <div className="flex justify-end gap-1">
                         <Button
                           variant="outline" size="sm"
                           onClick={() => openEditExpense(entry)}
                           title="Edit"
                         >
-                          <Pencil className="h-3.5 w-3.5" />
+                          <Pencil className="h-3 w-3" />
                         </Button>
                         <Button
                           variant="outline" size="sm"
@@ -913,7 +960,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                           title="Delete"
                           className="text-red-500 hover:bg-red-50 hover:text-red-600"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-3 w-3" />
                         </Button>
                       </div>
                     </TableCell>
@@ -1032,7 +1079,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
               {/* Income vs Cost */}
               <div className="mt-6 p-4 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border">
-                <div className="grid grid-cols-3 gap-4 text-center">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
                   <div>
                     <div className="text-xs text-slate-600 mb-1">Total Income</div>
                     <div className="text-xl font-bold text-green-600">₹{costSummary.income_total.toLocaleString('en-IN')}</div>

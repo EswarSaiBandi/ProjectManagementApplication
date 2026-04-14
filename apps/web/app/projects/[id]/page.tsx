@@ -2,11 +2,18 @@
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
-    File, Image, StickyNote, ListTodo, Percent, Triangle, FileText, ShoppingBag, Box, Activity, PieChart, Users, Banknote, ClipboardCheck, Sparkles, Info, Package, Recycle, ArrowDownUp, Calculator
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+    File, Image, StickyNote, ListTodo, Percent, Triangle, FileText, ShoppingBag, Box, Activity, PieChart, Users, Banknote, ClipboardCheck, Sparkles, Info, Package, Recycle, ArrowDownUp, Calculator, MoreHorizontal
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import FinancialTab from "@/components/project-tabs/FinancialTab";
 import ActivitiesTab from "@/components/project-tabs/ActivitiesTab";
@@ -33,6 +40,8 @@ import { useRole } from "@/hooks/useRole";
 export default function ProjectDetailsPage({ params }: { params: { id: string } }) {
     const { role, isClient, loading: roleLoading } = useRole();
     const [activeTab, setActiveTab] = useState('activities');
+    const [visibleTabs, setVisibleTabs] = useState<number>(20);
+    const tabsContainerRef = useRef<HTMLDivElement>(null);
 
     // Set default tab once role is known
     useEffect(() => {
@@ -109,6 +118,27 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
         ? []
         : allTabs.filter(t => t.roles.includes(role));
 
+    // Calculate visible tabs on resize
+    useEffect(() => {
+        const calculateVisibleTabs = () => {
+            if (!tabsContainerRef.current) return;
+            const containerWidth = tabsContainerRef.current.offsetWidth;
+            // Rough estimate: ~120px per tab, leave 80px for "More" button
+            const estimatedTabWidth = 120;
+            const moreButtonSpace = 80;
+            const availableWidth = containerWidth - moreButtonSpace;
+            const maxVisible = Math.floor(availableWidth / estimatedTabWidth);
+            setVisibleTabs(Math.max(3, Math.min(maxVisible, tabs.length)));
+        };
+
+        calculateVisibleTabs();
+        window.addEventListener('resize', calculateVisibleTabs);
+        return () => window.removeEventListener('resize', calculateVisibleTabs);
+    }, [tabs.length]);
+
+    const displayedTabs = tabs.slice(0, visibleTabs);
+    const overflowTabs = tabs.slice(visibleTabs);
+
     return (
         <div className="space-y-6">
             {/* Header */}
@@ -127,25 +157,57 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
 
             {/* Tabs */}
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                {/* Wrapping Tab List */}
-                <div className="w-full mb-6 overflow-x-auto">
-                    <TabsList className="w-max min-w-full flex h-auto gap-2 sm:gap-4 bg-transparent p-0 justify-start">
-                        {tabs.map((tab) => (
-                            <TabsTrigger
-                                key={tab.value}
-                                value={tab.value}
-                                className={cn(
-                                    "rounded-none border-b-2 border-transparent px-2 py-2 gap-1.5 sm:gap-2 data-[state=active]:shadow-none transition-all whitespace-nowrap text-xs sm:text-sm",
-                                    tab.special
-                                        ? "bg-purple-600 text-white hover:bg-purple-700 rounded-md border-b-0 px-4 py-2 data-[state=active]:bg-purple-700 data-[state=active]:text-white font-semibold"
-                                        : "text-gray-500 hover:text-gray-900 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"
-                                )}
-                            >
-                                <tab.icon className={cn("h-4 w-4", tab.special ? "text-white" : "")} />
-                                {tab.label}
-                            </TabsTrigger>
-                        ))}
-                    </TabsList>
+                {/* Tab List with More Dropdown */}
+                <div ref={tabsContainerRef} className="w-full mb-6">
+                    <div className="flex items-center gap-2 border-b">
+                        <TabsList className="flex h-auto gap-2 bg-transparent p-0 justify-start flex-1 overflow-hidden">
+                            {displayedTabs.map((tab) => (
+                                <TabsTrigger
+                                    key={tab.value}
+                                    value={tab.value}
+                                    className={cn(
+                                        "rounded-none border-b-2 border-transparent px-3 py-2.5 gap-2 data-[state=active]:shadow-none transition-all whitespace-nowrap text-sm",
+                                        tab.special
+                                            ? "bg-purple-600 text-white hover:bg-purple-700 rounded-md border-b-0 px-4 py-2 data-[state=active]:bg-purple-700 data-[state=active]:text-white font-semibold"
+                                            : "text-gray-500 hover:text-gray-900 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"
+                                    )}
+                                >
+                                    <tab.icon className={cn("h-4 w-4", tab.special ? "text-white" : "")} />
+                                    <span className="hidden sm:inline">{tab.label}</span>
+                                </TabsTrigger>
+                            ))}
+                        </TabsList>
+                        
+                        {/* More Dropdown */}
+                        {overflowTabs.length > 0 && (
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="sm" className="gap-1 text-gray-500 hover:text-gray-900 mb-[-1px]">
+                                        <MoreHorizontal className="h-4 w-4" />
+                                        <span className="text-sm">More</span>
+                                        <Badge variant="secondary" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
+                                            {overflowTabs.length}
+                                        </Badge>
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56 max-h-96 overflow-y-auto">
+                                    {overflowTabs.map((tab) => (
+                                        <DropdownMenuItem
+                                            key={tab.value}
+                                            onClick={() => setActiveTab(tab.value)}
+                                            className={cn(
+                                                "flex items-center gap-2 cursor-pointer",
+                                                activeTab === tab.value && "bg-blue-50 text-blue-600 font-medium"
+                                            )}
+                                        >
+                                            <tab.icon className="h-4 w-4" />
+                                            {tab.label}
+                                        </DropdownMenuItem>
+                                    ))}
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        )}
+                    </div>
                 </div>
 
                 <div className="space-y-6">

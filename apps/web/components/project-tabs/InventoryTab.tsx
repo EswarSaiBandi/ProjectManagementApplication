@@ -73,7 +73,7 @@ export default function InventoryTab({ projectId }: { projectId: string }) {
   return (
     <div className="space-y-4">
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card className="bg-blue-50">
           <CardContent className="pt-4">
             <div className="flex items-center justify-between">
@@ -130,7 +130,7 @@ export default function InventoryTab({ projectId }: { projectId: string }) {
       {/* Main Inventory Table */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Package className="h-5 w-5 text-slate-500" />
@@ -188,42 +188,41 @@ export default function InventoryTab({ projectId }: { projectId: string }) {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <Table>
+              <Table className="min-w-[750px]">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[200px]">Material</TableHead>
-                    <TableHead className="text-center">Unit</TableHead>
-                    <TableHead className="text-center bg-blue-50">
+                    <TableHead className="min-w-[140px]">Material</TableHead>
+                    <TableHead className="w-[60px] text-center">Unit</TableHead>
+                    <TableHead className="w-[100px] text-center bg-blue-50">
                       <div className="flex items-center justify-center gap-1">
                         <Store className="h-4 w-4 text-blue-600" />
-                        In-Store
+                        <span className="text-xs">Store</span>
                       </div>
                     </TableHead>
-                    <TableHead className="text-center bg-green-50">
+                    <TableHead className="w-[100px] text-center bg-green-50">
                       <div className="flex items-center justify-center gap-1">
                         <ShoppingCart className="h-4 w-4 text-green-600" />
-                        Market Purchase
+                        <span className="text-xs">Market</span>
                       </div>
                     </TableHead>
-                    <TableHead className="text-center bg-purple-50">Total Stock</TableHead>
-                    <TableHead className="text-center bg-orange-50">Allocated (Global)</TableHead>
-                    <TableHead className="text-center bg-emerald-50">Available</TableHead>
-                    <TableHead>Project Allocations</TableHead>
+                    <TableHead className="w-[80px] text-center bg-purple-50 text-xs">Total</TableHead>
+                    <TableHead className="w-[90px] text-center bg-orange-50 text-xs">Allocated</TableHead>
+                    <TableHead className="w-[90px] text-center bg-emerald-50 text-xs">Available</TableHead>
+                    <TableHead className="min-w-[150px]">Projects</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filteredInventory.map((item) => (
                     <TableRow key={item.material_id} className="hover:bg-slate-50">
-                      <TableCell className="font-medium">{item.material_name}</TableCell>
-                      <TableCell className="text-center text-sm text-slate-600">{item.unit || '—'}</TableCell>
+                      <TableCell className="font-medium text-sm">{item.material_name}</TableCell>
+                      <TableCell className="text-center text-xs text-slate-600">{item.unit || '—'}</TableCell>
                       
                       {/* In-Store */}
                       <TableCell className="text-center bg-blue-50/50">
                         <div className="space-y-1">
-                          <div className="font-semibold text-blue-700">{item.in_store_quantity}</div>
-                          <div className="text-xs text-slate-500">
-                            Allocated: {item.in_store_allocated}<br/>
-                            Available: <span className="font-semibold text-blue-600">{item.in_store_available}</span>
+                          <div className="font-semibold text-blue-700 text-sm">{item.in_store_quantity}</div>
+                          <div className="text-[10px] text-slate-500">
+                            Avail: <span className="font-semibold text-blue-600">{item.in_store_available}</span>
                           </div>
                         </div>
                       </TableCell>
@@ -231,31 +230,30 @@ export default function InventoryTab({ projectId }: { projectId: string }) {
                       {/* Market Purchase */}
                       <TableCell className="text-center bg-green-50/50">
                         <div className="space-y-1">
-                          <div className="font-semibold text-green-700">{item.market_purchase_quantity}</div>
-                          <div className="text-xs text-slate-500">
-                            Allocated: {item.market_allocated}<br/>
-                            Available: <span className="font-semibold text-green-600">{item.market_available}</span>
+                          <div className="font-semibold text-green-700 text-sm">{item.market_purchase_quantity}</div>
+                          <div className="text-[10px] text-slate-500">
+                            Avail: <span className="font-semibold text-green-600">{item.market_available}</span>
                           </div>
                         </div>
                       </TableCell>
                       
                       {/* Total */}
                       <TableCell className="text-center bg-purple-50/50">
-                        <div className="text-lg font-bold text-purple-700">{item.total_quantity}</div>
+                        <div className="text-base font-bold text-purple-700">{item.total_quantity}</div>
                       </TableCell>
                       
                       {/* Allocated Global */}
                       <TableCell className="text-center bg-orange-50/50">
-                        <div className="text-lg font-semibold text-orange-700">
+                        <div className="text-base font-semibold text-orange-700">
                           {item.in_store_allocated + item.market_allocated}
                         </div>
                       </TableCell>
                       
                       {/* Available */}
                       <TableCell className="text-center bg-emerald-50/50">
-                        <div className="text-lg font-bold text-emerald-700">{item.total_available}</div>
+                        <div className="text-base font-bold text-emerald-700">{item.total_available}</div>
                         {item.total_available === 0 && (
-                          <Badge variant="destructive" className="text-xs mt-1">Out of Stock</Badge>
+                          <Badge variant="destructive" className="text-[10px] mt-1">Out</Badge>
                         )}
                       </TableCell>
                       
@@ -263,23 +261,26 @@ export default function InventoryTab({ projectId }: { projectId: string }) {
                       <TableCell>
                         {item.project_allocations && item.project_allocations.length > 0 ? (
                           <div className="space-y-1">
-                            {item.project_allocations.map((alloc, idx) => (
-                              <div key={idx} className="text-xs">
-                                <Badge variant="outline" className="mr-1">
-                                  {alloc.project_name}
+                            {item.project_allocations.slice(0, 2).map((alloc, idx) => (
+                              <div key={idx} className="text-[10px]">
+                                <Badge variant="outline" className="mr-1 text-[10px] py-0">
+                                  {alloc.project_name.substring(0, 15)}{alloc.project_name.length > 15 ? '...' : ''}
                                 </Badge>
                                 <span className="text-slate-600">
                                   {alloc.allocated} ({alloc.source === 'In-Store' ? (
-                                    <Store className="inline h-3 w-3 text-blue-600" />
+                                    <Store className="inline h-2.5 w-2.5 text-blue-600" />
                                   ) : (
-                                    <ShoppingCart className="inline h-3 w-3 text-green-600" />
+                                    <ShoppingCart className="inline h-2.5 w-2.5 text-green-600" />
                                   )})
                                 </span>
                               </div>
                             ))}
+                            {item.project_allocations.length > 2 && (
+                              <div className="text-[10px] text-slate-400">+{item.project_allocations.length - 2} more</div>
+                            )}
                           </div>
                         ) : (
-                          <span className="text-xs text-slate-400">No allocations</span>
+                          <span className="text-xs text-slate-400">None</span>
                         )}
                       </TableCell>
                     </TableRow>

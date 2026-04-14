@@ -33,6 +33,9 @@ type Transaction = {
     comments: string | null;
 };
 
+const STICKY_ACTION_CELL_CLASS =
+    "sticky right-0 z-10 bg-white shadow-[-8px_0_8px_-8px_rgba(15,23,42,0.2)]";
+
 export default function FinancialTab({ projectId }: { projectId: string }) {
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [quotesTotal, setQuotesTotal] = useState<number>(0);
@@ -387,7 +390,7 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                     {costLoading ? (
                         <div className="text-center py-4 text-muted-foreground">Loading cost data...</div>
                     ) : costSummary ? (
-                        <div className="grid grid-cols-4 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
                             <Card>
                                 <CardContent className="pt-4">
                                     <div className="flex items-center gap-2 mb-2">
@@ -446,7 +449,7 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                     
                     {/* Quick Navigation */}
                     {costSummary && (
-                        <div className="mt-4 pt-4 border-t flex gap-2">
+                        <div className="mt-4 pt-4 border-t flex flex-wrap gap-2">
                             <Button 
                                 size="sm" 
                                 variant="outline" 
@@ -618,19 +621,19 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                 </DialogDescription>
                             </DialogHeader>
                             <div className="grid gap-4 py-4">
-                                <div className="grid grid-cols-4 items-center gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
                                     <Label htmlFor="vendor" className="text-right text-slate-700">Vendor</Label>
                                     <Input id="vendor" value={newPayment.vendor_name} onChange={(e) => setNewPayment({ ...newPayment, vendor_name: e.target.value })} className="col-span-3 bg-white text-slate-900 border-slate-300" />
                                 </div>
-                                <div className="grid grid-cols-4 items-center gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
                                     <Label htmlFor="description" className="text-right text-slate-700">Desc</Label>
                                     <Input id="description" value={newPayment.description} onChange={(e) => setNewPayment({ ...newPayment, description: e.target.value })} className="col-span-3 bg-white text-slate-900 border-slate-300" />
                                 </div>
-                                <div className="grid grid-cols-4 items-center gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
                                     <Label htmlFor="amount" className="text-right text-slate-700">Amount</Label>
                                     <Input id="amount" type="number" value={newPayment.amount} onChange={(e) => setNewPayment({ ...newPayment, amount: e.target.value })} className="col-span-3 bg-white text-slate-900 border-slate-300" />
                                 </div>
-                                <div className="grid grid-cols-4 items-center gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
                                     <Label htmlFor="type" className="text-right text-slate-700">Type</Label>
                                     <div className="col-span-3">
                                         <Select value={newPayment.type} onValueChange={(val: string) => setNewPayment({ ...newPayment, type: val })}>
@@ -642,7 +645,7 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                         </Select>
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-4 items-center gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
                                     <Label htmlFor="category" className="text-right text-slate-700">Category</Label>
                                     <div className="col-span-3">
                                         <Select value={newPayment.category} onValueChange={(val: string) => setNewPayment({ ...newPayment, category: val })}>
@@ -654,7 +657,7 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                         </Select>
                                     </div>
                                 </div>
-                                <div className="grid grid-cols-4 items-center gap-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-center gap-2 sm:gap-4">
                                     <Label htmlFor="receipt" className="text-right text-slate-700">Receipt</Label>
                                     <div className="col-span-3">
                                         <Input
@@ -707,19 +710,19 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                             </DialogHeader>
                             {viewTransaction && (
                                 <div className="grid gap-4 py-4">
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">ID</Label><div className="col-span-3 text-sm">{viewTransaction.transaction_id}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Date</Label><div className="col-span-3 text-sm">{formatDate(viewTransaction.transaction_date)}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Vendor</Label><div className="col-span-3 text-sm">{viewTransaction.vendor_name}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Description</Label><div className="col-span-3 text-sm">{viewTransaction.description}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Amount</Label><div className={cn("col-span-3 text-sm font-bold", viewTransaction.amount > 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(viewTransaction.amount)}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Type</Label><div className="col-span-3 text-sm">{viewTransaction.type} ({viewTransaction.amount < 0 ? 'Debit' : 'Credit'})</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Category</Label><div className="col-span-3 text-sm">{viewTransaction.category}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Channel</Label><div className="col-span-3 text-sm">{viewTransaction.payment_channel}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Created By</Label><div className="col-span-3 text-sm">{viewTransaction.created_by_name}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Order Ref</Label><div className="col-span-3 text-sm text-blue-600">{viewTransaction.order_reference}</div></div>
-                                    <div className="grid grid-cols-4 items-start gap-4"><Label className="text-right font-bold text-slate-700">Comments</Label><div className="col-span-3 text-sm italic text-gray-600">{viewTransaction.comments || "No comments"}</div></div>
+                                <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">ID</Label><div className="col-span-3 text-sm">{viewTransaction.transaction_id}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Date</Label><div className="col-span-3 text-sm">{formatDate(viewTransaction.transaction_date)}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Vendor</Label><div className="col-span-3 text-sm">{viewTransaction.vendor_name}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Description</Label><div className="col-span-3 text-sm">{viewTransaction.description}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Amount</Label><div className={cn("col-span-3 text-sm font-bold", viewTransaction.amount > 0 ? 'text-green-600' : 'text-red-600')}>{formatCurrency(viewTransaction.amount)}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Type</Label><div className="col-span-3 text-sm">{viewTransaction.type} ({viewTransaction.amount < 0 ? 'Debit' : 'Credit'})</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Category</Label><div className="col-span-3 text-sm">{viewTransaction.category}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Channel</Label><div className="col-span-3 text-sm">{viewTransaction.payment_channel}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Created By</Label><div className="col-span-3 text-sm">{viewTransaction.created_by_name}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Order Ref</Label><div className="col-span-3 text-sm text-blue-600">{viewTransaction.order_reference}</div></div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4"><Label className="text-right font-bold text-slate-700">Comments</Label><div className="col-span-3 text-sm italic text-gray-600">{viewTransaction.comments || "No comments"}</div></div>
                                     {viewTransaction.receipt_url && viewTransaction.receipt_url !== 'true' && (
-                                        <div className="grid grid-cols-4 items-start gap-4">
+                                        <div className="grid grid-cols-1 sm:grid-cols-4 items-start gap-2 sm:gap-4">
                                             <Label className="text-right font-bold text-slate-700">Receipt</Label>
                                             <div className="col-span-3 text-sm">
                                                 <a href={viewTransaction.receipt_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1">
@@ -735,71 +738,28 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                     </Dialog>
                 </CardHeader>
                 <CardContent>
-                    <Table>
+                    <Table className="min-w-[900px]">
                         <TableHeader>
                             <TableRow>
-                                <TableHead className="w-[100px]">Created On</TableHead>
-                                <TableHead className="w-[100px]">Date</TableHead>
-                                <TableHead>Created By</TableHead>
-                                <TableHead>Vendor</TableHead>
-                                <TableHead>Transaction</TableHead>
-                                <TableHead>Channel</TableHead>
-                                <TableHead className="text-right">
-                                    <button
-                                        type="button"
-                                        className="inline-flex items-center gap-1 hover:text-slate-900"
-                                        onClick={() => {
-                                            setTxSort((prev) => {
-                                                if (!prev) return { key: 'amount', direction: 'desc' };
-                                                return { key: 'amount', direction: prev.direction === 'desc' ? 'asc' : 'desc' };
-                                            });
-                                        }}
-                                        title="Sort by amount"
-                                    >
-                                        Amount <ArrowUpDown className="h-3.5 w-3.5" />
-                                    </button>
-                                </TableHead>
-                                <TableHead className="text-center">Receipt</TableHead>
-                                <TableHead className="text-center">User</TableHead>
-                                <TableHead>Order</TableHead>
-                                <TableHead className="text-center">Details</TableHead>
-                                <TableHead className="text-center">Comments</TableHead>
-                                <TableHead className="text-center">Actions</TableHead>
+                                <TableHead className="w-[80px]">Date</TableHead>
+                                <TableHead className="min-w-[100px]">Vendor</TableHead>
+                                <TableHead className="min-w-[120px]">Transaction</TableHead>
+                                <TableHead className="w-[90px]">Channel</TableHead>
+                                <TableHead className="w-[100px] text-right">Amount</TableHead>
+                                <TableHead className="w-[50px] text-center">Receipt</TableHead>
+                                <TableHead className="w-[50px] text-center">Details</TableHead>
+                                <TableHead className="w-[50px] text-center">Notes</TableHead>
+                                <TableHead className={`w-[80px] text-center ${STICKY_ACTION_CELL_CLASS}`}>Actions</TableHead>
                             </TableRow>
                             {/* Filter Row */}
                             <TableRow className="bg-gray-50 hover:bg-gray-50">
                                 <TableHead className="p-1">
-                                    <div className="relative">
-                                        <Calendar className="absolute left-2 top-2 h-4 w-4 text-gray-400" />
-                                        <Input
-                                            type="date"
-                                            className="h-8 text-xs bg-white pl-8"
-                                            value={txFilters.createdOn}
-                                            onChange={(e) => handleTxFilterChange('createdOn', e.target.value)}
-                                        />
-                                    </div>
-                                </TableHead>
-                                <TableHead className="p-1">
-                                    <div className="relative">
-                                        <Calendar className="absolute left-2 top-2 h-4 w-4 text-gray-400" />
-                                        <Input
-                                            type="date"
-                                            className="h-8 text-xs bg-white pl-8"
-                                            value={txFilters.transactionDate}
-                                            onChange={(e) => handleTxFilterChange('transactionDate', e.target.value)}
-                                        />
-                                    </div>
-                                </TableHead>
-                                <TableHead className="p-1">
-                                    <div className="relative">
-                                        <Filter className="absolute left-2 top-2 h-4 w-4 text-gray-400" />
-                                        <Input
-                                            className="h-8 text-xs bg-white pl-8"
-                                            placeholder="Search..."
-                                            value={txFilters.createdBy}
-                                            onChange={(e) => handleTxFilterChange('createdBy', e.target.value)}
-                                        />
-                                    </div>
+                                    <Input
+                                        type="date"
+                                        className="h-8 text-xs bg-white"
+                                        value={txFilters.transactionDate}
+                                        onChange={(e) => handleTxFilterChange('transactionDate', e.target.value)}
+                                    />
                                 </TableHead>
                                 <TableHead className="p-1">
                                     <Input
@@ -825,92 +785,54 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
                                         onChange={(e) => handleTxFilterChange('channel', e.target.value)}
                                     />
                                 </TableHead>
-                                <TableHead className="p-1">
+                                <TableHead className="p-1" colSpan={5}>
                                     <div className="h-8" />
-                                </TableHead>
-                                <TableHead className="p-1"></TableHead>
-                                <TableHead className="p-1">
-                                    <div className="h-8" />
-                                </TableHead>
-                                <TableHead className="p-1">
-                                    <Input
-                                        className="h-8 text-xs bg-white"
-                                        placeholder="Search..."
-                                        value={txFilters.user}
-                                        onChange={(e) => handleTxFilterChange('user', e.target.value)}
-                                    />
-                                </TableHead>
-                                <TableHead className="p-1"></TableHead>
-                                <TableHead className="p-1"></TableHead>
-                                <TableHead className="p-1">
-                                    <Input
-                                        className="h-8 text-xs bg-white"
-                                        placeholder="Search..."
-                                        value={txFilters.order}
-                                        onChange={(e) => handleTxFilterChange('order', e.target.value)}
-                                    />
                                 </TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {loading ? (
                                 <TableRow>
-                                    <TableCell colSpan={13} className="text-center py-8">Loading Transactions...</TableCell>
+                                    <TableCell colSpan={9} className="text-center py-8">Loading Transactions...</TableCell>
                                 </TableRow>
                             ) : transactions.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={13} className="text-center py-8">No transactions found.</TableCell>
+                                    <TableCell colSpan={9} className="text-center py-8">No transactions found.</TableCell>
                                 </TableRow>
                             ) : filteredTransactions.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={13} className="text-center py-8">No matching transactions.</TableCell>
+                                    <TableCell colSpan={9} className="text-center py-8">No matching transactions.</TableCell>
                                 </TableRow>
                             ) : (
                                 sortedTransactions.map((t) => (
                                     <TableRow key={t.transaction_id} className="hover:bg-gray-50">
-                                        <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDate(t.created_at)}</TableCell>
-                                        <TableCell className="py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDate(t.transaction_date)}</TableCell>
-                                        <TableCell className="py-2 text-sm font-medium">{t.created_by_name}</TableCell>
-                                        <TableCell className="py-2 text-sm">{t.vendor_name}</TableCell>
-                                        <TableCell className="py-2 text-sm font-medium">{t.description}</TableCell>
-                                        <TableCell className="py-2 text-sm">{t.payment_channel}</TableCell>
+                                        <TableCell className="py-2 text-xs text-muted-foreground">{formatDate(t.transaction_date)}</TableCell>
+                                        <TableCell className="py-2 text-sm font-medium">{t.vendor_name}</TableCell>
+                                        <TableCell className="py-2 text-xs">{t.description}</TableCell>
+                                        <TableCell className="py-2 text-xs">{t.payment_channel}</TableCell>
                                         <TableCell className={cn("py-2 text-right text-sm font-bold", t.amount > 0 ? 'text-green-600' : 'text-red-500')}>
                                             {formatCurrency(t.amount)}
                                         </TableCell>
                                         <TableCell className="py-2 text-center">
                                             {t.receipt_url && t.receipt_url !== 'true' ? (
-                                                <div className="flex justify-center">
-                                                    <a href={t.receipt_url} target="_blank" rel="noopener noreferrer" className="bg-gray-200 p-1 rounded hover:bg-gray-300 transition-colors">
-                                                        <ImageIcon className="h-4 w-4 text-gray-600" />
-                                                    </a>
-                                                </div>
+                                                <a href={t.receipt_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800">
+                                                    <ImageIcon className="h-4 w-4 inline" />
+                                                </a>
                                             ) : null}
                                         </TableCell>
                                         <TableCell className="py-2 text-center">
-                                            <span className="text-sm font-medium">{t.user_name}</span>
-                                        </TableCell>
-                                        <TableCell className="py-2 text-xs text-blue-600">{t.order_reference}</TableCell>
-                                        <TableCell className="py-2 text-center">
-                                            <div className="flex justify-center">
-                                                <ExternalLink className="h-4 w-4 text-blue-500 cursor-pointer hover:text-blue-700" onClick={() => setViewTransaction(t)} />
-                                            </div>
+                                            <ExternalLink className="h-4 w-4 text-blue-500 cursor-pointer hover:text-blue-700 inline" onClick={() => setViewTransaction(t)} />
                                         </TableCell>
                                         <TableCell className="py-2 text-center">
-                                            <div className="flex justify-center">
-                                                <MessageSquare className={cn("h-4 w-4 cursor-pointer hover:scale-110 transition-transform", t.comments ? "text-blue-600 fill-blue-100" : "text-gray-400")} onClick={() => openCommentDialog(t)} />
-                                            </div>
+                                            <MessageSquare className={cn("h-4 w-4 cursor-pointer hover:scale-110 transition-transform inline", t.comments ? "text-blue-600 fill-blue-100" : "text-gray-400")} onClick={() => openCommentDialog(t)} />
                                         </TableCell>
-                                        <TableCell className="py-2 text-center">
-                                            <div className="flex items-center justify-center gap-2">
-                                                <Button variant="ghost" size="icon" onClick={() => handleEditTransaction(t)}>
-                                                    <div className="bg-blue-50 p-1.5 rounded-full hover:bg-blue-100 transition-colors">
-                                                        <Pencil className="h-3 w-3 text-blue-600" />
-                                                    </div>
+                                        <TableCell className={`py-2 text-center ${STICKY_ACTION_CELL_CLASS}`}>
+                                            <div className="flex items-center justify-center gap-1">
+                                                <Button variant="ghost" size="sm" onClick={() => handleEditTransaction(t)} className="h-7 w-7 p-0">
+                                                    <Pencil className="h-3 w-3 text-blue-600" />
                                                 </Button>
-                                                <Button variant="ghost" size="icon" onClick={() => handleDeleteTransaction(t.transaction_id)}>
-                                                    <div className="bg-red-50 p-1.5 rounded-full hover:bg-red-100 transition-colors">
-                                                        <Trash className="h-3 w-3 text-red-600" />
-                                                    </div>
+                                                <Button variant="ghost" size="sm" onClick={() => handleDeleteTransaction(t.transaction_id)} className="h-7 w-7 p-0">
+                                                    <Trash className="h-3 w-3 text-red-600" />
                                                 </Button>
                                             </div>
                                         </TableCell>
