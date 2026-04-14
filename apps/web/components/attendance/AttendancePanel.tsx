@@ -36,9 +36,10 @@ type Me = { user_id: string; full_name: string | null; role: string | null; emai
 
 type NameRow = { user_id: string; full_name: string | null };
 type LabourPickOption = { id: number; name: string; labour_type?: 'In-House' | 'Outsourced' | null };
-type AttendanceStatusCode = 'WO' | 'HO' | 'CO' | 'HD' | 'CL' | 'SL' | 'PL' | 'LOP';
+type AttendanceStatusCode = 'WORKING' | 'WO' | 'HO' | 'CO' | 'HD' | 'CL' | 'SL' | 'PL' | 'LOP';
 
 const ATTENDANCE_STATUS_OPTIONS: { code: AttendanceStatusCode; label: string }[] = [
+  { code: 'WORKING', label: 'WORKING (Working)' },
   { code: 'WO', label: 'WO (Week Off)' },
   { code: 'HO', label: 'HO (Holiday)' },
   { code: 'CO', label: 'CO (Company Off)' },
@@ -100,6 +101,16 @@ function formatAttendanceDateTime(iso: string | null) {
 function attendanceStatusLabel(code: AttendanceStatusCode | null | undefined) {
   if (!code) return '—';
   return ATTENDANCE_STATUS_OPTIONS.find((o) => o.code === code)?.label || code;
+}
+
+function monthStartISO(monthKey: string) {
+  return `${monthKey}-01`;
+}
+
+function monthEndISO(monthKey: string) {
+  const [y, m] = monthKey.split('-').map((v) => Number(v));
+  const d = new Date(y, m, 0);
+  return `${monthKey}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 async function downloadRowsAsExcel(
@@ -171,12 +182,22 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   const [adminAttUserId, setAdminAttUserId] = useState<string>('');
   const [adminAttRows, setAdminAttRows] = useState<AttendanceLog[]>([]);
   const [adminAttLoading, setAdminAttLoading] = useState(false);
+  const [adminCalendarMonth, setAdminCalendarMonth] = useState(() => getLocalISODate().slice(0, 7));
+  const [adminCalendarRows, setAdminCalendarRows] = useState<AttendanceLog[]>([]);
+  const [adminCalendarLoading, setAdminCalendarLoading] = useState(false);
+  const [calendarDayDetailOpen, setCalendarDayDetailOpen] = useState(false);
+  const [calendarDayDetail, setCalendarDayDetail] = useState<{ iso: string; rows: AttendanceLog[] } | null>(null);
+  const [adminCalendarTeamSearch, setAdminCalendarTeamSearch] = useState('');
+  const [adminCalendarFieldSearch, setAdminCalendarFieldSearch] = useState('');
+  const [adminCalendarSelectedUserIds, setAdminCalendarSelectedUserIds] = useState<string[]>([]);
+  const [adminCalendarSelectedLabourIds, setAdminCalendarSelectedLabourIds] = useState<number[]>([]);
+  const [manpowerLabourIds, setManpowerLabourIds] = useState<number[]>([]);
   const [adminAttLabourId, setAdminAttLabourId] = useState<string>('');
   const [adminLabourPicklist, setAdminLabourPicklist] = useState<LabourPickOption[]>([]);
   const [labourNameById, setLabourNameById] = useState<Record<number, string>>({});
   const [labourProjectsById, setLabourProjectsById] = useState<Record<number, string[]>>({});
   const [adminStatusDate, setAdminStatusDate] = useState(() => getLocalISODate());
-  const [adminStatusCode, setAdminStatusCode] = useState<AttendanceStatusCode>('WO');
+  const [adminStatusCode, setAdminStatusCode] = useState<AttendanceStatusCode>('WORKING');
   const [adminStatusTargetType, setAdminStatusTargetType] = useState<'team' | 'field'>('team');
   const [adminStatusSelectedUserIds, setAdminStatusSelectedUserIds] = useState<string[]>([]);
   const [adminStatusSelectedLabourIds, setAdminStatusSelectedLabourIds] = useState<string[]>([]);
@@ -505,6 +526,29 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
     }
   };
 
+  const loadAdminMonthlyCalendar = async () => {
+    if (!showStaffReportBlock) return;
+    setAdminCalendarLoading(true);
+    try {
+      const start = monthStartISO(adminCalendarMonth);
+      const end = monthEndISO(adminCalendarMonth);
+      const { data, error } = await supabase
+        .from('attendance_logs')
+        .select('*')
+        .gte('work_date', start)
+        .lte('work_date', end)
+        .order('work_date', { ascending: true })
+        .limit(2000);
+      if (error) throw error;
+      setAdminCalendarRows((data as AttendanceLog[]) || []);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Failed to load monthly calendar');
+      setAdminCalendarRows([]);
+    } finally {
+      setAdminCalendarLoading(false);
+    }
+  };
+
   const saveAdminAttendanceStatus = async () => {
     if (!showStaffReportBlock) return;
     if (!adminStatusDate) {
@@ -579,21 +623,43 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
   }, [showStaffReportBlock, adminAttFrom, adminAttTo, adminAttUserId, adminAttLabourId]);
 
   useEffect(() => {
+    if (showStaffReportBlock) {
+      void loadAdminMonthlyCalendar();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showStaffReportBlock, adminCalendarMonth]);
+
+  useEffect(() => {
     if (!showStaffReportBlock) return;
     void (async () => {
-      const { data: labourData } = await supabase.from('labour_master').select('id, name, labour_type').eq('is_active', true).order('name');
+      const [{ data: labourData }, { data: pmRows }] = await Promise.all([
+        supabase.from('labour_master').select('id, name, labour_type').eq('is_active', true).order('name'),
+        supabase.from('project_manpower').select('labour_id').not('labour_id', 'is', null),
+      ]);
       setAdminLabourPicklist((labourData as LabourPickOption[]) || []);
+      const linkedIds = Array.from(
+        new Set(
+          (pmRows || [])
+            .map((r: { labour_id?: number | null }) => r.labour_id)
+            .filter((x): x is number => x != null && Number.isFinite(Number(x)))
+        )
+      );
+      setManpowerLabourIds(linkedIds);
     })();
   }, [showStaffReportBlock]);
 
   useEffect(() => {
-    if (!showStaffReportBlock || adminAttRows.length === 0) return;
+    if (!showStaffReportBlock) return;
     const ids = Array.from(
       new Set(
-        adminAttRows.map((r) => r.labour_id).filter((x): x is number => x != null && Number.isFinite(Number(x)))
+        [...adminAttRows, ...adminCalendarRows]
+          .map((r) => r.labour_id)
+          .filter((x): x is number => x != null && Number.isFinite(Number(x)))
       )
     );
-    if (ids.length === 0) return;
+    if (ids.length === 0) {
+      return;
+    }
     void (async () => {
       const { data } = await supabase.from('labour_master').select('id, name').in('id', ids);
       if (!data?.length) return;
@@ -605,13 +671,15 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
         return n;
       });
     })();
-  }, [adminAttRows, showStaffReportBlock]);
+  }, [adminAttRows, adminCalendarRows, showStaffReportBlock]);
 
   useEffect(() => {
     if (!showStaffReportBlock) return;
     const labourIds = Array.from(
       new Set(
-        adminAttRows.map((r) => r.labour_id).filter((x): x is number => x != null && Number.isFinite(Number(x)))
+        [...adminAttRows, ...adminCalendarRows]
+          .map((r) => r.labour_id)
+          .filter((x): x is number => x != null && Number.isFinite(Number(x)))
       )
     );
     if (labourIds.length === 0) {
@@ -651,13 +719,15 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
         setLabourProjectsById({});
       }
     })();
-  }, [adminAttRows, showStaffReportBlock]);
+  }, [adminAttRows, adminCalendarRows, showStaffReportBlock]);
 
   useEffect(() => {
     if (!showStaffReportBlock) return;
     const ids = Array.from(
       new Set(
-        adminAttRows.map((r) => r.labour_id).filter((x): x is number => x != null && Number.isFinite(Number(x)))
+        [...adminAttRows, ...adminCalendarRows]
+          .map((r) => r.labour_id)
+          .filter((x): x is number => x != null && Number.isFinite(Number(x)))
       )
     );
     if (ids.length === 0) {
@@ -692,7 +762,7 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
         setLabourHasLoginById({});
       }
     })();
-  }, [adminAttRows, showStaffReportBlock]);
+  }, [adminAttRows, adminCalendarRows, showStaffReportBlock]);
 
   useEffect(() => {
     if (!isAttendanceDialogOpen) {
@@ -935,6 +1005,53 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
       return String(l.name || '').toLowerCase().includes(q);
     });
 
+  const calendarTeamOptions = [...nameDirectory]
+    .filter((n) => n.user_id)
+    .sort((a, b) => String(a.full_name || a.user_id).localeCompare(String(b.full_name || b.user_id)))
+    .filter((n) => {
+      const q = adminCalendarTeamSearch.trim().toLowerCase();
+      if (!q) return true;
+      return String(n.full_name || n.user_id).toLowerCase().includes(q);
+    });
+
+  const calendarManpowerOptions = [...adminLabourPicklist]
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
+    .filter((l) => {
+      const q = adminCalendarFieldSearch.trim().toLowerCase();
+      if (!q) return true;
+      return String(l.name || '').toLowerCase().includes(q);
+    });
+
+  const hasCalendarFilters = adminCalendarSelectedUserIds.length > 0 || adminCalendarSelectedLabourIds.length > 0;
+  const filteredCalendarRows = hasCalendarFilters
+    ? adminCalendarRows.filter((r) => {
+        if (r.user_id && adminCalendarSelectedUserIds.includes(r.user_id)) return true;
+        if (r.labour_id != null && adminCalendarSelectedLabourIds.includes(r.labour_id)) return true;
+        return false;
+      })
+    : adminCalendarRows;
+
+  const calendarRowsByDate = filteredCalendarRows.reduce<Record<string, AttendanceLog[]>>((acc, row) => {
+    if (!acc[row.work_date]) acc[row.work_date] = [];
+    acc[row.work_date].push(row);
+    return acc;
+  }, {});
+
+  const [calendarYear, calendarMonthNum] = adminCalendarMonth.split('-').map((v) => Number(v));
+  const calendarFirstWeekday = new Date(calendarYear, calendarMonthNum - 1, 1).getDay();
+  const calendarDaysInMonth = new Date(calendarYear, calendarMonthNum, 0).getDate();
+  const openCalendarDayDetail = (iso: string, rows: AttendanceLog[]) => {
+    const sorted = [...rows].sort((a, b) => rowSubjectLabel(a).localeCompare(rowSubjectLabel(b)));
+    setCalendarDayDetail({ iso, rows: sorted });
+    setCalendarDayDetailOpen(true);
+  };
+  const calendarCells = Array.from({ length: 42 }, (_, i) => {
+    const day = i - calendarFirstWeekday + 1;
+    if (day < 1 || day > calendarDaysInMonth) return null;
+    const iso = `${adminCalendarMonth}-${String(day).padStart(2, '0')}`;
+    return { day, iso, rows: calendarRowsByDate[iso] || [] };
+  });
+
   return (
     <div className="space-y-6">
       {isTeamOverview && !canViewStaffReport && (
@@ -1149,14 +1266,183 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
             <CardTitle className="text-sm font-medium">
               {isTeamOverview ? 'Team attendance overview' : 'All staff attendance'}
             </CardTitle>
-            <p className="text-xs text-muted-foreground">
-              Filter by date, team member, or field (manpower) row. Open a row for photos and maps. Apply migrations{' '}
-              <code className="text-[11px]">20260401000800</code>, <code className="text-[11px]">20260401000900</code>, and{' '}
-              <code className="text-[11px]">20260404120000</code>, <code className="text-[11px]">20260404131000</code>, and{' '}
-              <code className="text-[11px]">20260404133000</code> for field-staff proxy attendance.
-            </p>
+           
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="rounded-md border bg-white p-3 space-y-3">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Monthly calendar</Label>
+                  <Input
+                    type="month"
+                    className="bg-white w-[180px]"
+                    value={adminCalendarMonth}
+                    onChange={(e) => setAdminCalendarMonth(e.target.value)}
+                  />
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={loadAdminMonthlyCalendar} disabled={adminCalendarLoading}>
+                  {adminCalendarLoading ? 'Loading…' : 'Refresh month'}
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Filter one or many people from team and manpower to compare week-off/status day-wise.
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-md border bg-slate-50 p-2 space-y-2">
+                  <div className="text-xs font-medium text-slate-700">Employees with login access</div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={adminCalendarTeamSearch}
+                      onChange={(e) => setAdminCalendarTeamSearch(e.target.value)}
+                      className="bg-white h-8"
+                      placeholder="Search employee..."
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAdminCalendarSelectedUserIds(calendarTeamOptions.map((x) => x.user_id))}
+                    >
+                      Select visible
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setAdminCalendarSelectedUserIds([])}>
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="max-h-28 overflow-y-auto rounded-md border bg-white p-1 space-y-1">
+                    {calendarTeamOptions.map((n) => (
+                      <label key={n.user_id} className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-slate-50 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={adminCalendarSelectedUserIds.includes(n.user_id)}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setAdminCalendarSelectedUserIds((prev) =>
+                              checked ? [...prev, n.user_id] : prev.filter((x) => x !== n.user_id)
+                            );
+                          }}
+                        />
+                        <span>{n.full_name || n.user_id.slice(0, 8) + '…'}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border bg-slate-50 p-2 space-y-2">
+                  <div className="text-xs font-medium text-slate-700">Manpower module people</div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={adminCalendarFieldSearch}
+                      onChange={(e) => setAdminCalendarFieldSearch(e.target.value)}
+                      className="bg-white h-8"
+                      placeholder="Search manpower..."
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setAdminCalendarSelectedLabourIds(calendarManpowerOptions.map((x) => x.id))}
+                    >
+                      Select visible
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setAdminCalendarSelectedLabourIds([])}>
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="max-h-28 overflow-y-auto rounded-md border bg-white p-1 space-y-1">
+                    {calendarManpowerOptions.map((l) => (
+                      <label key={l.id} className="flex items-center gap-2 px-2 py-1 text-xs hover:bg-slate-50 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={adminCalendarSelectedLabourIds.includes(l.id)}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setAdminCalendarSelectedLabourIds((prev) =>
+                              checked ? [...prev, l.id] : prev.filter((x) => x !== l.id)
+                            );
+                          }}
+                        />
+                        <span>{l.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Showing {filteredCalendarRows.length} records for selected people. Leave both lists empty to view everyone.
+              </div>
+              <div className="grid grid-cols-7 gap-2 text-xs font-medium text-slate-600">
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
+                  <div key={d} className="px-2 py-1">
+                    {d}
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-7 gap-2">
+                {calendarCells.map((cell, idx) =>
+                  !cell ? (
+                    <div key={`blank-${idx}`} className="min-h-[120px] rounded-md border bg-slate-50/50" />
+                  ) : (
+                    <div
+                      key={cell.iso}
+                      className="min-h-[120px] rounded-md border bg-slate-50 p-2 cursor-pointer hover:bg-slate-100"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openCalendarDayDetail(cell.iso, cell.rows)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') openCalendarDayDetail(cell.iso, cell.rows);
+                      }}
+                    >
+                      <div className="text-xs font-semibold text-slate-700 mb-1">{cell.day}</div>
+                      <div className="space-y-1">
+                        {cell.rows.slice(0, 4).map((r) => (
+                          <div key={r.attendance_id} className="text-[11px] text-slate-700 truncate" title={`${rowSubjectLabel(r)} · ${r.attendance_status || attendanceStatusLabel(r.attendance_status)}`}>
+                            {rowSubjectLabel(r)} · {r.attendance_status || '—'}
+                          </div>
+                        ))}
+                        {cell.rows.length > 4 ? (
+                          <div className="text-[11px] text-slate-500">+{cell.rows.length - 4} more</div>
+                        ) : null}
+                      </div>
+                    </div>
+                  )
+                )}
+              </div>
+            </div>
+
+            <Dialog open={calendarDayDetailOpen} onOpenChange={setCalendarDayDetailOpen}>
+              <DialogContent className="max-w-3xl bg-white">
+                <DialogHeader>
+                  <DialogTitle>Attendance Details — {calendarDayDetail?.iso || ''}</DialogTitle>
+                  <DialogDescription>
+                    {calendarDayDetail ? `${calendarDayDetail.rows.length} people on this date` : ''}
+                  </DialogDescription>
+                </DialogHeader>
+                {!calendarDayDetail || calendarDayDetail.rows.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No attendance rows for this date.</div>
+                ) : (
+                  <div className="max-h-[60vh] overflow-y-auto border rounded-md">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Person</TableHead>
+                          <TableHead>Type</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {calendarDayDetail.rows.map((r) => (
+                          <TableRow key={r.attendance_id}>
+                            <TableCell className="font-medium">{rowSubjectLabel(r)}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{r.user_id ? 'Employee' : 'Manpower'}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground">{r.attendance_status || '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </DialogContent>
+            </Dialog>
             <div className="rounded-md border bg-slate-50 p-3 space-y-3">
               <div className="text-xs font-medium text-slate-700">Attendance calendar update (date-wise)</div>
               <div className="flex flex-wrap items-end gap-3">
