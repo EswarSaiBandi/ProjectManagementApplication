@@ -514,14 +514,33 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
     if (!showStaffReportBlock) return;
     setAdminAttLoading(true);
     try {
-      let q = supabase.from('attendance_logs').select('*').order('work_date', { ascending: false }).limit(800);
-      if (adminAttFrom) q = q.gte('work_date', adminAttFrom);
-      if (adminAttTo) q = q.lte('work_date', adminAttTo);
-      if (adminAttLabourId) q = q.eq('labour_id', Number(adminAttLabourId));
-      else if (adminAttUserId) q = q.eq('user_id', adminAttUserId);
-      const { data, error } = await q;
-      if (error) throw error;
-      setAdminAttRows((data as AttendanceLog[]) || []);
+      const pageSize = 1000;
+      let from = 0;
+      const allRows: AttendanceLog[] = [];
+
+      while (true) {
+        let q = supabase
+          .from('attendance_logs')
+          .select('*')
+          .order('work_date', { ascending: false })
+          .order('attendance_id', { ascending: false })
+          .range(from, from + pageSize - 1);
+
+        if (adminAttFrom) q = q.gte('work_date', adminAttFrom);
+        if (adminAttTo) q = q.lte('work_date', adminAttTo);
+        if (adminAttLabourId) q = q.eq('labour_id', Number(adminAttLabourId));
+        else if (adminAttUserId) q = q.eq('user_id', adminAttUserId);
+
+        const { data, error } = await q;
+        if (error) throw error;
+
+        const batch = (data as AttendanceLog[]) || [];
+        allRows.push(...batch);
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+
+      setAdminAttRows(allRows);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'Failed to load attendance report';
       toast.error(msg);
@@ -537,15 +556,29 @@ export function AttendancePanel({ me, nameDirectory, showAdminReport, mode = 'se
     try {
       const start = monthStartISO(adminCalendarMonth);
       const end = monthEndISO(adminCalendarMonth);
-      const { data, error } = await supabase
-        .from('attendance_logs')
-        .select('*')
-        .gte('work_date', start)
-        .lte('work_date', end)
-        .order('work_date', { ascending: true })
-        .limit(2000);
-      if (error) throw error;
-      setAdminCalendarRows((data as AttendanceLog[]) || []);
+      const pageSize = 1000;
+      let from = 0;
+      const allRows: AttendanceLog[] = [];
+
+      while (true) {
+        const { data, error } = await supabase
+          .from('attendance_logs')
+          .select('*')
+          .gte('work_date', start)
+          .lte('work_date', end)
+          .order('work_date', { ascending: true })
+          .order('attendance_id', { ascending: true })
+          .range(from, from + pageSize - 1);
+
+        if (error) throw error;
+
+        const batch = (data as AttendanceLog[]) || [];
+        allRows.push(...batch);
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+
+      setAdminCalendarRows(allRows);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : 'Failed to load monthly calendar');
       setAdminCalendarRows([]);
