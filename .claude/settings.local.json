@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -NoProfile -Command \"\\(Get-Item 'c:\\\\Users\\\\EswarSaiBandi\\\\Desktop\\\\ProjectManagementApplication\\\\combined-migrations.sql'\\).Length\")"
+    ]
+  }
+}
