@@ -50,6 +50,10 @@ export default function MaterialMovementsTab({ projectId }: { projectId: string 
           material_variants(variant_name, quantity_per_unit)
         `)
         .eq('project_id', numericProjectId)
+        // Exclude store-perspective rows — they're the companion entries for
+        // MR-approval dispatches / return-acceptance receipts. Shown on the
+        // Store page's Stock Entry Logs tab, not at project level.
+        .not('movement_type', 'in', '("Store In","Store Out")')
         .order('movement_date', { ascending: false });
 
       if (error) {

@@ -54,11 +54,9 @@ type ManpowerCostRow = {
   labour: { name: string; designation: string | null; monthly_salary: number | null } | null;
 };
 
-type StockUsedCostRow = {
-  quantity_used: number;
-  cost_per_unit: number | null;
-  material_variants?: { quantity_per_unit: number | null } | null;
-};
+// material_cost_actual is sourced directly from the project_costing_summary
+// view (SUM(qty_used * unit_price) in SQL). No parallel client-side sum —
+// that had drift vs the view whenever joins diverged.
 
 function workingDays(start: string, end: string) {
   return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1;
@@ -85,8 +83,6 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<BudgetEntry[]>([]);
   const [manpowerRows, setManpowerRows] = useState<ManpowerCostRow[]>([]);
-  const [stockUsedCostActual, setStockUsedCostActual] = useState(0);
-  const [hasStockUsedRows, setHasStockUsedRows] = useState(false);
   const [costCategories, setCostCategories] = useState<string[]>([]);
   const [expenseTypeOptions, setExpenseTypeOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -225,38 +221,26 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     })));
   };
 
-  const fetchStockUsedCost = async () => {
-    if (!Number.isFinite(numericProjectId)) return;
-    const { data, error } = await supabase
-      .from('project_stock_used')
-      .select('quantity_used, cost_per_unit, material_variants(quantity_per_unit)')
-      .eq('project_id', numericProjectId);
-
-    if (error || !data) {
-      setStockUsedCostActual(0);
-      setHasStockUsedRows(false);
-      return;
-    }
-
-    setHasStockUsedRows(data.length > 0);
-    const total = (data as any as StockUsedCostRow[]).reduce((sum, row) => {
-      const qpu = Number(row.material_variants?.quantity_per_unit || 0);
-      const units = qpu > 0 ? Number(row.quantity_used || 0) / qpu : 0;
-      const cpu = Number(row.cost_per_unit || 0);
-      return sum + (units * cpu);
-    }, 0);
-    setStockUsedCostActual(total);
-  };
-
   useEffect(() => {
     fetchCostingSummary();
     fetchLedgerEntries();
     fetchCostCategories();
     fetchExpenseTypeOptions();
     fetchManpowerCosts();
-    fetchStockUsedCost();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numericProjectId]);
+
+  // Refresh when Stock Used / Returns mutate inventory.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId: string }>).detail;
+      if (String(detail?.projectId) !== String(projectId)) return;
+      fetchCostingSummary();
+    };
+    window.addEventListener('inventory-updated', handler);
+    return () => window.removeEventListener('inventory-updated', handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   const resetBudgetForm = () => {
     setBudgetForm({
@@ -440,7 +424,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const totalInHouseCost    = costSummary?.labor_cost_inhouse    ?? clientInHouseCost;
   const totalOutsourcedCost = costSummary?.labor_cost_outsourced ?? clientOutsourcedCost;
   const totalLaborCost      = totalInHouseCost + totalOutsourcedCost;
-  const displayedMaterialCost = hasStockUsedRows ? stockUsedCostActual : (costSummary?.material_cost_actual ?? 0);
+  const displayedMaterialCost = Number(costSummary?.material_cost_actual ?? 0);
   const displayedTotalActualCost = displayedMaterialCost + totalLaborCost + (costSummary?.expenses_total ?? 0);
   const displayedCostVariance = (costSummary?.budgeted_total ?? 0) - displayedTotalActualCost;
   const displayedProfitLoss = (costSummary?.income_total ?? 0) - displayedTotalActualCost;

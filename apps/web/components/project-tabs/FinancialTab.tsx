@@ -138,6 +138,17 @@ export default function FinancialTab({ projectId }: { projectId: string }) {
         }
     }, [projectId]);
 
+    // Re-fetch cost summary when inventory mutates (Stock Used / Revert / Return).
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent<{ projectId: string }>).detail;
+            if (String(detail?.projectId) !== String(projectId)) return;
+            fetchCostingSummary();
+        };
+        window.addEventListener('inventory-updated', handler);
+        return () => window.removeEventListener('inventory-updated', handler);
+    }, [projectId]);
+
     const handleTxFilterChange = (key: keyof typeof txFilters, value: string) => {
         setTxFilters((prev) => ({ ...prev, [key]: value }));
     };

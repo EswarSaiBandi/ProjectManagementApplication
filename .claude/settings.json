@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(del \"c:\\\\Users\\\\EswarSaiBandi\\\\Desktop\\\\ProjectManagementApplication\\\\supabase\\\\migrations\\\\20260501000000_fifo_lifo_pricing_variants.sql\")",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(awk -F: '$1 >= 873 && $1 <= 1700')",
+      "Bash(awk ' *)",
+      "Bash(mv apps/web/app/store/page.tsx.new apps/web/app/store/page.tsx)"
+    ]
+  }
+}

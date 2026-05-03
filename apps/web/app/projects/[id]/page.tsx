@@ -27,11 +27,11 @@ import OrdersTab from "@/components/project-tabs/OrdersTab";
 import InvoicesTab from "@/components/project-tabs/InvoicesTab";
 import MaterialRequestTab from "@/components/project-tabs/MaterialRequestTab";
 import ProjectInventoryTab from "@/components/project-tabs/ProjectInventoryTab";
-import StockUsedTab from "@/components/project-tabs/StockUsedTab";
+import StockUsedFifoTab from "@/components/project-tabs/StockUsedFifoTab";
+import ReturnsFifoTab from "@/components/project-tabs/ReturnsFifoTab";
 import ManpowerTab from "@/components/project-tabs/ManpowerTab";
 import ChecklistsTab from "@/components/project-tabs/ChecklistsTab";
 import DetailsTab from "@/components/project-tabs/DetailsTab";
-import ExcessMaterialsTab from "@/components/project-tabs/ExcessMaterialsTab";
 import MaterialMovementsTab from "@/components/project-tabs/MaterialMovementsTab";
 import ProjectCostingTab from "@/components/project-tabs/ProjectCostingTab";
 import ProjectMembersTab from "@/components/project-tabs/ProjectMembersTab";
@@ -96,7 +96,7 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
         { label: "Inventory",          icon: Package,       value: "inventory",             roles: ['Admin','ProjectManager','SiteSupervisor'] },
         { label: "Material Movements", icon: ArrowDownUp,   value: "material-movements",    roles: ['Admin','ProjectManager','SiteSupervisor'] },
         { label: "Stock Used",         icon: Box,           value: "stock-used",            roles: ['Admin','ProjectManager','SiteSupervisor'] },
-        { label: "Excess Materials",   icon: Recycle,       value: "excess-materials",      roles: ['Admin','ProjectManager','SiteSupervisor'] },
+        { label: "Return to Store",    icon: Recycle,       value: "excess-materials",      roles: ['Admin','ProjectManager','SiteSupervisor'] },
         { label: "Manpower",           icon: Users,         value: "manpower",              roles: ['Admin','ProjectManager','SiteSupervisor'] },
         { label: "Activities",         icon: Activity,      value: "activities",            roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Client Progress",    icon: PieChart,      value: "client-progress",       roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
@@ -216,8 +216,8 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                     {activeTab === 'financials' && <FinancialTab projectId={params.id} />}
                     {activeTab === 'inventory' && <ProjectInventoryTab projectId={params.id} />}
                     {activeTab === 'material-movements' && <MaterialMovementsTab projectId={params.id} />}
-                    {activeTab === 'stock-used' && <StockUsedTab projectId={params.id} />}
-                    {activeTab === 'excess-materials' && <ExcessMaterialsTab projectId={params.id} />}
+                    {activeTab === 'stock-used' && <StockUsedFifoTab projectId={params.id} />}
+                    {activeTab === 'excess-materials' && <ReturnsFifoTab projectId={params.id} />}
                     {activeTab === 'manpower' && <ManpowerTab projectId={params.id} />}
                     {activeTab === 'activities' && <ActivitiesTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} readOnly={isClient} />}

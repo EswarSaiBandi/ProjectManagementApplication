@@ -158,21 +158,45 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
         return;
       }
 
-      const { error } = await supabase
+      const qty = parseFloat(requestForm.requested_quantity);
+
+      const { data: inserted, error } = await supabase
         .from('material_requests')
         .insert({
           project_id: projectId,
           material_id: requestForm.material_id,
-          requested_quantity: parseFloat(requestForm.requested_quantity),
+          requested_quantity: qty,
           request_source: requestForm.request_source,
           priority: requestForm.priority,
           required_by: requestForm.required_by || null,
           purpose: requestForm.purpose.trim() || null,
           status: 'Pending'
-        });
-      
+        })
+        .select('request_id, request_number')
+        .single();
+
       if (error) throw error;
-      
+
+      // Audit-log the workflow event
+      const { data: userRes } = await supabase.auth.getUser();
+      await supabase.from('material_movement_logs').insert({
+        material_id: requestForm.material_id,
+        project_id: Number(projectId),
+        movement_type: 'Request Raised',
+        reference_type: 'Material Request',
+        reference_id: inserted?.request_id ?? null,
+        quantity: qty,
+        notes:
+          'REQUEST RAISED: ' + qty + ' units requested'
+          + ' | request#=' + (inserted?.request_number ?? 'N/A')
+          + ' | priority=' + requestForm.priority
+          + ' | source=' + requestForm.request_source
+          + (requestForm.required_by ? ' | required_by=' + requestForm.required_by : '')
+          + (requestForm.purpose.trim() ? ' | purpose="' + requestForm.purpose.trim() + '"' : '')
+          + ' | at=' + new Date().toISOString(),
+        created_by: userRes?.user?.id ?? null,
+      });
+
       toast.success('Material request submitted successfully');
       setIsRequestDialogOpen(false);
       resetRequestForm();
@@ -193,20 +217,21 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
         return;
       }
 
-      const { error } = await supabase
-        .from('material_returns')
-        .insert({
-          project_id: projectId,
-          material_id: returnForm.material_id,
-          returned_quantity: parseFloat(returnForm.returned_quantity),
-          condition: returnForm.condition,
-          reason: returnForm.reason.trim() || null,
-          status: 'Pending'
-        });
-      
+      const qty = parseFloat(returnForm.returned_quantity);
+
+      // Use the validating RPC — checks returnable quantity and logs 'Return Submitted'.
+      const { data, error } = await supabase.rpc('submit_material_return_request', {
+        p_project_id:  Number(projectId),
+        p_material_id: Number(returnForm.material_id),
+        p_quantity:    qty,
+        p_condition:   returnForm.condition,
+        p_reason:      returnForm.reason.trim() || null,
+      });
+
       if (error) throw error;
-      
-      toast.success('Material return submitted successfully');
+
+      const result = Array.isArray(data) ? data[0] : data;
+      toast.success(`Return request ${result?.return_number || 'submitted'} — awaiting store approval`);
       setIsReturnDialogOpen(false);
       resetReturnForm();
       fetchReturns();
@@ -217,15 +242,40 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
 
   const handleCancelRequest = async (requestId: number) => {
     if (!confirm('Are you sure you want to cancel this request?')) return;
-    
+
     try {
+      // Fetch current request details for the log
+      const { data: req } = await supabase
+        .from('material_requests')
+        .select('material_id, requested_quantity, request_number')
+        .eq('request_id', requestId)
+        .single();
+
       const { error } = await supabase
         .from('material_requests')
         .update({ status: 'Cancelled' })
         .eq('request_id', requestId);
-      
+
       if (error) throw error;
-      
+
+      if (req) {
+        const { data: userRes } = await supabase.auth.getUser();
+        await supabase.from('material_movement_logs').insert({
+          material_id: req.material_id,
+          project_id: Number(projectId),
+          movement_type: 'Request Cancelled',
+          reference_type: 'Material Request',
+          reference_id: requestId,
+          quantity: Number(req.requested_quantity || 0),
+          notes:
+            'REQUEST CANCELLED by project'
+            + ' | request#=' + (req.request_number ?? 'N/A')
+            + ' | qty=' + Number(req.requested_quantity || 0)
+            + ' | at=' + new Date().toISOString(),
+          created_by: userRes?.user?.id ?? null,
+        });
+      }
+
       toast.success('Request cancelled');
       fetchRequests();
     } catch (error: any) {

@@ -13,6 +13,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/lib/supabase';
 import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
+import PriceVariantsTab from '@/components/store/PriceVariantsTab';
+import StoreInventoryAggregateTab from '@/components/store/StoreInventoryAggregateTab';
 
 interface Material {
   material_id: number;
@@ -80,6 +82,7 @@ interface StockEntryLog {
   log_id: number;
   material_id: number;
   variant_id: number | null;
+  project_id: number | null;
   movement_type: string;
   quantity: number;
   number_of_units: number | null;
@@ -88,6 +91,7 @@ interface StockEntryLog {
   material_name?: string;
   variant_name?: string;
   metric?: string;
+  project_name?: string | null;
 }
 
 const STOCK_META_PREFIX = '[STOCK_META]';
@@ -132,6 +136,7 @@ export default function StorePage() {
   
   const [selectedRequest, setSelectedRequest] = useState<MaterialRequest | null>(null);
   const [fulfillmentUnits, setFulfillmentUnits] = useState<Array<{ variant_id: number; units: number }>>([]);
+  const [fulfillQty, setFulfillQty] = useState('');
   const [approvalNotes, setApprovalNotes] = useState('');
   
   const [selectedReturn, setSelectedReturn] = useState<MaterialReturn | null>(null);
@@ -141,6 +146,17 @@ export default function StorePage() {
 
   useEffect(() => {
     fetchAll();
+  }, []);
+
+  // Refresh Stock Entry Logs + inventory whenever PriceVariantsTab mutates store stock
+  // (add stock, damage/write-off, pause/resume variant).
+  useEffect(() => {
+    const handler = () => {
+      fetchStockEntryLogs();
+      fetchInventory();
+    };
+    window.addEventListener('store-stock-updated', handler);
+    return () => window.removeEventListener('store-stock-updated', handler);
   }, []);
 
   const fetchAll = async () => {
@@ -260,16 +276,22 @@ export default function StorePage() {
         log_id,
         material_id,
         variant_id,
+        project_id,
         movement_type,
         quantity,
         number_of_units,
         notes,
         movement_date,
         materials_master!inner(material_name, metric),
-        material_variants(variant_name)
+        material_variants(variant_name),
+        projects(project_name)
       `)
+      // Store Entry Logs shows every store-side stock movement regardless of
+      // source: manual adjustments, damage/write-off, MR-approval dispatches,
+      // and return-acceptance receipts. The companion Store In/Out rows for
+      // MR/return flows keep project_id set for audit linkage, so we filter
+      // on movement_type alone.
       .in('movement_type', ['Store In', 'Store Out'])
-      .in('reference_type', ['Initial Stock', 'Manual Adjustment'])
       .order('movement_date', { ascending: false })
       .limit(200);
 
@@ -282,7 +304,8 @@ export default function StorePage() {
       ...log,
       material_name: log.materials_master?.material_name,
       metric: log.materials_master?.metric,
-      variant_name: log.material_variants?.variant_name
+      variant_name: log.material_variants?.variant_name,
+      project_name: log.projects?.project_name ?? null,
     }));
 
     setStockEntryLogs(logsWithDetails);
@@ -503,74 +526,67 @@ export default function StorePage() {
   const openFulfillDialog = (request: MaterialRequest) => {
     setSelectedRequest(request);
     setApprovalNotes('');
-    
-    const requestMaterialId = Number(request.material_id);
-    const availableVariants = inventory.filter(inv => Number(inv.material_id) === requestMaterialId);
-    setFulfillmentUnits(availableVariants.map(inv => ({ variant_id: Number(inv.variant_id), units: 0 })));
-    
+    setFulfillQty(String(request.requested_quantity));
+    setFulfillmentUnits([]); // legacy, unused by new flow
     setIsFulfillDialogOpen(true);
   };
 
   const handleApproveRequest = async () => {
     if (!selectedRequest) return;
-    
+
+    const qty = parseFloat(fulfillQty);
+    if (!qty || qty <= 0) {
+      toast.error('Fulfill quantity must be > 0');
+      return;
+    }
+
     try {
-      const totalFulfilled = fulfillmentUnits.reduce((sum, fu) => {
-        const inv = inventory.find(i => Number(i.variant_id) === Number(fu.variant_id));
-        return sum + (inv ? fu.units * inv.quantity_per_unit! : 0);
-      }, 0);
-
-      if (totalFulfilled === 0) {
-        toast.error('Please allocate at least some units');
-        return;
-      }
-
+      // 1. Mark the request approved with the approved quantity.
       const { error: reqError } = await supabase
         .from('material_requests')
         .update({
           status: 'Approved',
           approved_at: new Date().toISOString(),
           approval_notes: approvalNotes.trim() || null,
-          fulfilled_quantity: totalFulfilled
+          fulfilled_quantity: qty,
         })
         .eq('request_id', selectedRequest.request_id);
-      
       if (reqError) throw reqError;
 
-      for (const fu of fulfillmentUnits) {
-        if (fu.units > 0) {
-          const inv = inventory.find(i => Number(i.variant_id) === Number(fu.variant_id));
-          if (!inv) continue;
-          
-          await supabase
-            .from('request_fulfillment_items')
-            .insert({
-              request_id: selectedRequest.request_id,
-              variant_id: fu.variant_id,
-              units_issued: fu.units,
-              quantity_issued: fu.units * inv.quantity_per_unit!
-            });
+      // 2. FIFO-allocate from store to project.
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('allocate_material_fifo', {
+        p_material_id: Number(selectedRequest.material_id),
+        p_project_id:  Number(selectedRequest.project_id),
+        p_required_qty: qty,
+      });
+      if (rpcErr) throw rpcErr;
 
-          await supabase
-            .from('store_inventory')
-            .update({
-              number_of_units: inv.number_of_units - fu.units,
-              total_quantity: inv.total_quantity - (fu.units * inv.quantity_per_unit!),
-              last_updated: new Date().toISOString()
-            })
-            .eq('inventory_id', inv.inventory_id);
-        }
+      const result = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+      const allocationId = result?.allocation_id;
+      const totalCost    = Number(result?.total_cost || 0);
+
+      // 3. Stamp allocation metadata to link back to the request.
+      if (allocationId) {
+        const noteParts: string[] = [`Fulfills request ${selectedRequest.request_number}`];
+        if (approvalNotes.trim()) noteParts.push(approvalNotes.trim());
+        noteParts.push(`FIFO cost=Rs.${totalCost.toFixed(2)}`);
+        await supabase
+          .from('material_allocations')
+          .update({
+            source_type: 'In-Store',
+            allocation_date: new Date().toISOString().slice(0, 10),
+            notes: noteParts.join(' | '),
+          })
+          .eq('allocation_id', allocationId);
       }
 
+      // 4. Mark the request Fulfilled.
       await supabase
         .from('material_requests')
-        .update({
-          status: 'Fulfilled',
-          fulfilled_at: new Date().toISOString()
-        })
+        .update({ status: 'Fulfilled', fulfilled_at: new Date().toISOString() })
         .eq('request_id', selectedRequest.request_id);
 
-      toast.success('Request approved and fulfilled');
+      toast.success(`Request fulfilled — FIFO cost Rs. ${totalCost.toFixed(2)}`);
       setIsFulfillDialogOpen(false);
       fetchAll();
     } catch (error: any) {
@@ -580,7 +596,7 @@ export default function StorePage() {
 
   const handleRejectRequest = async () => {
     if (!selectedRequest) return;
-    
+
     try {
       const { error } = await supabase
         .from('material_requests')
@@ -590,9 +606,26 @@ export default function StorePage() {
           approval_notes: approvalNotes.trim() || 'Rejected by store'
         })
         .eq('request_id', selectedRequest.request_id);
-      
+
       if (error) throw error;
-      
+
+      const { data: userRes } = await supabase.auth.getUser();
+      await supabase.from('material_movement_logs').insert({
+        material_id: selectedRequest.material_id,
+        project_id: selectedRequest.project_id,
+        movement_type: 'Request Rejected',
+        reference_type: 'Material Request',
+        reference_id: selectedRequest.request_id,
+        quantity: Number(selectedRequest.requested_quantity || 0),
+        notes:
+          'REQUEST REJECTED by store'
+          + ' | request#=' + selectedRequest.request_number
+          + ' | qty=' + Number(selectedRequest.requested_quantity || 0)
+          + (approvalNotes.trim() ? ' | reason="' + approvalNotes.trim() + '"' : '')
+          + ' | at=' + new Date().toISOString(),
+        created_by: userRes?.user?.id ?? null,
+      });
+
       toast.success('Request rejected');
       setIsFulfillDialogOpen(false);
       fetchPendingRequests();
@@ -609,48 +642,36 @@ export default function StorePage() {
 
   const handleAcceptReturn = async () => {
     if (!selectedReturn) return;
-    
-    try {
-      const { error } = await supabase
-        .from('material_returns')
-        .update({
-          status: 'Accepted',
-          reviewed_at: new Date().toISOString(),
-          review_notes: returnReviewNotes.trim() || 'Accepted by store'
-        })
-        .eq('return_id', selectedReturn.return_id);
-      
-      if (error) throw error;
-      
-      toast.success('Return accepted and added to inventory');
-      setIsReturnDialogOpen(false);
-      fetchAll();
-    } catch (error: any) {
-      toast.error('Failed to accept return: ' + error.message);
-    }
+
+    // Approval RPC does everything atomically: LIFO stock-move, batch re-credit,
+    // status update, and movement log. No parallel inserts from UI needed.
+    const { data, error } = await supabase.rpc('approve_material_return_request', {
+      p_return_id:    selectedReturn.return_id,
+      p_review_notes: returnReviewNotes.trim() || null,
+    });
+
+    if (error) { toast.error('Failed to accept return: ' + error.message); return; }
+
+    const result = Array.isArray(data) ? data[0] : data;
+    const value = Number(result?.total_value || 0);
+    toast.success(`Return accepted — Rs. ${value.toFixed(2)} re-credited to store (LIFO)`);
+    setIsReturnDialogOpen(false);
+    fetchAll();
   };
 
   const handleRejectReturn = async () => {
     if (!selectedReturn) return;
-    
-    try {
-      const { error } = await supabase
-        .from('material_returns')
-        .update({
-          status: 'Rejected',
-          reviewed_at: new Date().toISOString(),
-          review_notes: returnReviewNotes.trim() || 'Rejected by store'
-        })
-        .eq('return_id', selectedReturn.return_id);
-      
-      if (error) throw error;
-      
-      toast.success('Return rejected');
-      setIsReturnDialogOpen(false);
-      fetchPendingReturns();
-    } catch (error: any) {
-      toast.error('Failed to reject return: ' + error.message);
-    }
+
+    const { error } = await supabase.rpc('reject_material_return_request', {
+      p_return_id:    selectedReturn.return_id,
+      p_review_notes: returnReviewNotes.trim() || null,
+    });
+
+    if (error) { toast.error('Failed to reject return: ' + error.message); return; }
+
+    toast.success('Return rejected');
+    setIsReturnDialogOpen(false);
+    fetchPendingReturns();
   };
 
   const resetReductionForm = () => {
@@ -860,370 +881,22 @@ export default function StorePage() {
           </div>
         </div>
 
-        <Tabs defaultValue="inventory" className="space-y-6">
+        <Tabs defaultValue="price-variants" className="space-y-6">
           <TabsList className="bg-white border">
+            <TabsTrigger value="price-variants">Price Variants</TabsTrigger>
             <TabsTrigger value="inventory">Inventory</TabsTrigger>
-            <TabsTrigger value="reduce-stock">Reduce Stock</TabsTrigger>
             <TabsTrigger value="requests">Material Requests</TabsTrigger>
             <TabsTrigger value="returns">Material Returns</TabsTrigger>
             <TabsTrigger value="stock-entry-logs">Stock Entry Logs</TabsTrigger>
           </TabsList>
 
-          {/* Inventory Tab */}
-          <TabsContent value="inventory" className="space-y-4">
-            <Card className="bg-white shadow-sm">
-              <CardHeader className="border-b bg-slate-50">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2">
-                    <Package className="h-5 w-5 text-blue-600" />
-                    Store Inventory
-                  </CardTitle>
-                  <Dialog
-                    open={isInventoryDialogOpen}
-                    onOpenChange={(open) => {
-                      setIsInventoryDialogOpen(open);
-                      if (!open) setStockBillFile(null);
-                    }}
-                  >
-                    <DialogTrigger asChild>
-                      <Button onClick={openNewInventory} className="bg-blue-600 hover:bg-blue-700">
-                        <Plus className="h-4 w-4 mr-2" /> Add Stock
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent className="bg-white max-w-md max-h-[85vh] overflow-y-auto">
-                      <DialogHeader>
-                        <DialogTitle>
-                          {inventoryForm.inventory_id ? 'Update Inventory' : 'Add Stock to Inventory'}
-                        </DialogTitle>
-                      </DialogHeader>
-                      <div className="space-y-4 py-4">
-                        <div className="space-y-2">
-                          <Label>Material *</Label>
-                          <Select
-                            value={inventoryForm.material_id?.toString()}
-                            onValueChange={(v) => {
-                              const materialId = parseInt(v);
-                              setInventoryForm({ ...inventoryForm, material_id: materialId, variant_id: null });
-                            }}
-                          >
-                            <SelectTrigger className="bg-white">
-                              <SelectValue placeholder="Select material" />
-                            </SelectTrigger>
-                            <SelectContent className="bg-white">
-                              {materials.map((m) => (
-                                <SelectItem key={m.material_id} value={m.material_id.toString()}>
-                                  {m.material_name} ({m.metric})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Variant *</Label>
-                          <Select
-                            value={inventoryForm.variant_id?.toString()}
-                            onValueChange={(v) => setInventoryForm({ ...inventoryForm, variant_id: parseInt(v) })}
-                            disabled={!inventoryForm.material_id}
-                          >
-                            <SelectTrigger className="bg-white">
-                              <SelectValue placeholder="Select variant" />
-                            </SelectTrigger>
-                            <SelectContent className="bg-white">
-                              {getVariantsForMaterial(inventoryForm.material_id).map((v) => (
-                                <SelectItem key={v.variant_id} value={v.variant_id.toString()}>
-                                  {v.variant_name} ({v.quantity_per_unit} {materials.find(m => m.material_id === v.material_id)?.metric})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Number of Units * (decimal supported, e.g., 0.5, 2.75)</Label>
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
-                            value={inventoryForm.number_of_units}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, number_of_units: e.target.value })}
-                            placeholder="e.g., 10 or 5.5"
-                            className="bg-white"
-                          />
-                          {inventoryForm.variant_id && inventoryForm.number_of_units && (
-                            <div className="text-sm bg-blue-50 border border-blue-200 rounded p-2">
-                              <strong>Total Quantity:</strong> {' '}
-                              <span className="font-bold text-blue-700">
-                                {(parseFloat(inventoryForm.number_of_units) * (variants.find(v => v.variant_id === inventoryForm.variant_id)?.quantity_per_unit || 0)).toFixed(2)} {materials.find(m => m.material_id === inventoryForm.material_id)?.metric}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Location</Label>
-                          <Input
-                            value={inventoryForm.location}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, location: e.target.value })}
-                            placeholder="e.g., Warehouse A, Shelf 3"
-                            className="bg-white"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Notes</Label>
-                          <Textarea
-                            value={inventoryForm.notes}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, notes: e.target.value })}
-                            placeholder="Additional remarks"
-                            className="bg-white"
-                            rows={3}
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Purchase Order Date</Label>
-                          <Input
-                            type="date"
-                            value={inventoryForm.purchase_order_date}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, purchase_order_date: e.target.value })}
-                            max={todayDate}
-                            className="bg-white"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Invoice Number</Label>
-                          <Input
-                            value={inventoryForm.invoice_number}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, invoice_number: e.target.value })}
-                            placeholder="e.g., INV-2026-001"
-                            className="bg-white"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Amount Per Unit</Label>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={inventoryForm.amount_per_unit}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, amount_per_unit: e.target.value })}
-                            placeholder="e.g., 1250.50"
-                            className="bg-white"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>GST</Label>
-                          <Input
-                            value={inventoryForm.gst}
-                            onChange={(e) => setInventoryForm({ ...inventoryForm, gst: e.target.value })}
-                            placeholder="e.g., 18% or 250.00"
-                            className="bg-white"
-                          />
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label>Bill Upload * (mandatory)</Label>
-                          <Input
-                            type="file"
-                            accept=".pdf,.jpg,.jpeg,.png,.webp"
-                            onChange={(e) => setStockBillFile(e.target.files?.[0] ?? null)}
-                            className="bg-white"
-                          />
-                          {stockBillFile ? (
-                            <p className="text-xs text-slate-600">
-                              Selected bill: <span className="font-medium">{stockBillFile.name}</span>
-                            </p>
-                          ) : (
-                            <p className="text-xs text-amber-700">You must upload bill before saving stock entry.</p>
-                          )}
-                        </div>
-
-                        {(validUnitsForPrice > 0 || validAmountPerUnitForPrice > 0 || gstInput) && (
-                          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 space-y-1">
-                            <div className="text-sm text-slate-700">
-                              <span className="font-medium">Base Price:</span>{' '}
-                              ₹{basePrice.toFixed(2)}
-                              <span className="text-slate-500 ml-1">
-                                ({validUnitsForPrice.toFixed(2)} units x ₹{validAmountPerUnitForPrice.toFixed(2)})
-                              </span>
-                            </div>
-                            <div className="text-sm text-slate-700">
-                              <span className="font-medium">GST:</span>{' '}
-                              ₹{gstAmount.toFixed(2)}
-                              <span className="text-slate-500 ml-1">({gstDisplay})</span>
-                            </div>
-                            <div className="pt-1 border-t border-emerald-200 text-sm font-semibold text-emerald-800">
-                              Total Price: ₹{totalPrice.toFixed(2)}
-                            </div>
-                          </div>
-                        )}
-
-                        <div className="flex gap-2 pt-4">
-                          <Button onClick={handleSaveInventory} disabled={!stockBillFile} className="flex-1 bg-blue-600 hover:bg-blue-700">
-                            {inventoryForm.inventory_id ? 'Update' : 'Add'}
-                          </Button>
-                          <Button
-                            onClick={() => setIsInventoryDialogOpen(false)}
-                            variant="outline"
-                            className="flex-1"
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-                </div>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-slate-50 border-b">
-                      <tr>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Material</th>
-                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Variant</th>
-                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units Available</th>
-                        <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Total Count</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {inventory.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-8 text-center text-slate-500">
-                            No inventory yet. Add stock to get started.
-                          </td>
-                        </tr>
-                      ) : (
-                        inventory.map((item) => (
-                          <tr key={item.inventory_id} className="hover:bg-slate-50">
-                            <td className="px-4 py-3 text-sm font-medium text-slate-900">{item.material_name}</td>
-                            <td className="px-4 py-3 text-sm text-slate-600">{item.variant_name}</td>
-                            <td className="px-4 py-3 text-sm text-right text-slate-900 font-medium">{item.number_of_units}</td>
-                            <td className="px-4 py-3 text-sm text-right">
-                              <span className="font-semibold text-slate-900">{item.total_quantity}</span>
-                              <span className="text-slate-500 ml-1">{item.metric}</span>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+          <TabsContent value="price-variants" className="space-y-4">
+            <PriceVariantsTab />
           </TabsContent>
 
-          {/* Reduce Stock Tab */}
-          <TabsContent value="reduce-stock" className="space-y-4">
-            <Card className="bg-white shadow-sm">
-              <CardHeader className="border-b bg-slate-50">
-                <CardTitle className="flex items-center gap-2">
-                  <Package className="h-5 w-5 text-red-600" />
-                  Reduce Store Inventory
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6 space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Material *</Label>
-                    <Select
-                      value={reductionForm.material_id?.toString()}
-                      onValueChange={(value) => {
-                        const materialId = parseInt(value);
-                        setReductionForm({
-                          ...reductionForm,
-                          material_id: materialId,
-                          variant_id: null
-                        });
-                      }}
-                    >
-                      <SelectTrigger className="bg-white">
-                        <SelectValue placeholder="Select material" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white">
-                        {materials
-                          .filter((m) => inventory.some((inv) => inv.material_id === m.material_id))
-                          .map((m) => (
-                            <SelectItem key={m.material_id} value={m.material_id.toString()}>
-                              {m.material_name} ({m.metric})
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Variant *</Label>
-                    <Select
-                      value={reductionForm.variant_id?.toString()}
-                      onValueChange={(value) => setReductionForm({ ...reductionForm, variant_id: parseInt(value) })}
-                      disabled={!reductionForm.material_id}
-                    >
-                      <SelectTrigger className="bg-white">
-                        <SelectValue placeholder="Select variant" />
-                      </SelectTrigger>
-                      <SelectContent className="bg-white">
-                        {inventory
-                          .filter((inv) => inv.material_id === reductionForm.material_id)
-                          .map((inv) => (
-                            <SelectItem key={inv.variant_id} value={inv.variant_id.toString()}>
-                              {inv.variant_name} (Available: {inv.number_of_units} units)
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Units to Remove *</Label>
-                    <Input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      value={reductionForm.number_of_units}
-                      onChange={(e) => setReductionForm({ ...reductionForm, number_of_units: e.target.value })}
-                      placeholder="e.g., 1 or 0.5"
-                      className="bg-white"
-                    />
-                    {reductionForm.variant_id && (
-                      <p className="text-xs text-slate-500">
-                        Available units:{' '}
-                        <span className="font-semibold text-slate-700">
-                          {inventory.find((inv) => inv.variant_id === reductionForm.variant_id)?.number_of_units ?? 0}
-                        </span>
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Remarks * (Mandatory)</Label>
-                    <Textarea
-                      value={reductionForm.remarks}
-                      onChange={(e) => setReductionForm({ ...reductionForm, remarks: e.target.value })}
-                      placeholder="Reason for removing stock"
-                      className="bg-white"
-                      rows={3}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end">
-                  <Button
-                    onClick={handleReduceStock}
-                    disabled={isReducingStock}
-                    className="bg-red-600 hover:bg-red-700"
-                  >
-                    {isReducingStock ? 'Processing...' : 'Reduce Stock'}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+          {/* Inventory Tab (aggregated FIFO view) */}
+          <TabsContent value="inventory" className="space-y-4">
+            <StoreInventoryAggregateTab />
           </TabsContent>
 
           {/* Stock Entry Logs Tab */}
@@ -1242,6 +915,7 @@ export default function StorePage() {
                       <tr>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Date</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Type</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Project</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Material</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Variant</th>
                         <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units</th>
@@ -1257,7 +931,7 @@ export default function StorePage() {
                     <tbody className="divide-y">
                       {stockEntryLogs.length === 0 ? (
                         <tr>
-                          <td colSpan={12} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={13} className="px-4 py-8 text-center text-slate-500">
                             No stock entry logs found
                           </td>
                         </tr>
@@ -1289,6 +963,13 @@ export default function StorePage() {
                                 <Badge className={log.movement_type === 'Store Out' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}>
                                   {log.movement_type}
                                 </Badge>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-slate-700">
+                                {log.project_name ? (
+                                  <span>{log.project_name} <span className="text-slate-400 text-xs">#{log.project_id}</span></span>
+                                ) : (
+                                  <span className="text-slate-400 italic">— store-only —</span>
+                                )}
                               </td>
                               <td className="px-4 py-3 text-sm font-medium text-slate-900">{log.material_name}</td>
                               <td className="px-4 py-3 text-sm text-slate-600">{log.variant_name || '-'}</td>
@@ -1549,53 +1230,19 @@ export default function StorePage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Available Units (Select quantity to fulfill)</Label>
-                <div className="border rounded-lg divide-y">
-                  {inventory.filter(inv => Number(inv.material_id) === Number(selectedRequest.material_id)).map((inv) => {
-                    const inventoryVariantId = Number(inv.variant_id);
-                    const currentFulfillment = fulfillmentUnits.find(fu => Number(fu.variant_id) === inventoryVariantId);
-                    return (
-                      <div key={inventoryVariantId} className="p-3 flex items-center justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium text-sm">{inv.variant_name}</p>
-                          <p className="text-xs text-slate-600">Available: {inv.number_of_units} units ({inv.total_quantity} {inv.metric})</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            max={inv.number_of_units}
-                            value={currentFulfillment?.units || ''}
-                            onChange={(e) => {
-                              const newUnits = parseFloat(e.target.value) || 0;
-                              setFulfillmentUnits(prev =>
-                                prev.some(fu => Number(fu.variant_id) === inventoryVariantId)
-                                  ? prev.map(fu =>
-                                      Number(fu.variant_id) === inventoryVariantId
-                                        ? { ...fu, units: Math.min(newUnits, inv.number_of_units) }
-                                        : fu
-                                    )
-                                  : [...prev, { variant_id: inventoryVariantId, units: Math.min(newUnits, inv.number_of_units) }]
-                              );
-                            }}
-                            className="w-24 bg-white"
-                            placeholder="0.5"
-                          />
-                          <span className="text-sm text-slate-600">units</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="bg-blue-50 p-3 rounded-lg">
-                  <p className="text-sm font-semibold text-blue-900">
-                    Total to fulfill: {fulfillmentUnits.reduce((sum, fu) => {
-                      const inv = inventory.find(i => Number(i.variant_id) === Number(fu.variant_id));
-                      return sum + (inv ? fu.units * inv.quantity_per_unit! : 0);
-                    }, 0).toFixed(2)} {selectedRequest.metric}
-                  </p>
-                </div>
+                <Label>Quantity to Fulfill *</Label>
+                <Input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={fulfillQty}
+                  onChange={(e) => setFulfillQty(e.target.value)}
+                  className="bg-white"
+                  placeholder={`${selectedRequest.requested_quantity}`}
+                />
+                <p className="text-xs text-slate-500">
+                  Stock will be allocated from the store using FIFO across price variants (oldest purchase first). Cost is calculated at the exact variant prices consumed.
+                </p>
               </div>
 
               <div className="space-y-2">
