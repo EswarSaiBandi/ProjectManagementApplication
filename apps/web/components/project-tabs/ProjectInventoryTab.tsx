@@ -146,7 +146,7 @@ export default function ProjectInventoryTab({ projectId }: { projectId: string }
           <div className="p-10 text-center text-slate-500">
             <Package className="h-10 w-10 mx-auto mb-2 text-slate-300" />
             <p className="font-medium">No materials allocated to this project yet.</p>
-            <p className="text-sm">Use <strong>Allocate Stock</strong> to pull material from the store.</p>
+
           </div>
         ) : (
           <Table>
