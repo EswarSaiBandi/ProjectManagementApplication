@@ -27,8 +27,15 @@ type Project = {
     project_name: string;
     status: string;
     location: string | null;
-    project_type: string | null;
+    project_type: string[] | null;  // multi-valued
 };
+
+// Normalize whatever the API returns (array, CSV string, null) into string[].
+function toProjectTypeArray(v: unknown): string[] {
+    if (Array.isArray(v)) return v.map((s) => String(s).trim()).filter(Boolean);
+    if (typeof v === 'string') return v.split(',').map((s) => s.trim()).filter(Boolean);
+    return [];
+}
 
 export default function ProjectsPage() {
     const { isClient, isAdmin, role } = useRole();
@@ -40,11 +47,16 @@ export default function ProjectsPage() {
     // New/Edit Project Form State
     const [isNewProjectOpen, setIsNewProjectOpen] = useState(false);
     const [editingId, setEditingId] = useState<number | null>(null);
-    const [newProject, setNewProject] = useState({
+    const [newProject, setNewProject] = useState<{
+        project_name: string;
+        location: string;
+        status: string;
+        project_type: string[];
+    }>({
         project_name: '',
         location: '',
         status: 'Planning',
-        project_type: ''
+        project_type: [],
     });
 
     // Delete Project State
@@ -60,7 +72,12 @@ export default function ProjectsPage() {
             .order('created_at', { ascending: false });
 
         if (data) {
-            setProjects(data);
+            setProjects(
+                (data as any[]).map((p) => ({
+                    ...p,
+                    project_type: toProjectTypeArray(p.project_type),
+                })) as Project[]
+            );
         } else if (error) {
             console.error("Error fetching projects:", error);
             toast.error("Failed to fetch projects.");
@@ -95,19 +112,27 @@ export default function ProjectsPage() {
         fetchProjectTypeOptions();
     }, []);
 
-    useEffect(() => {
-        if (!newProject.project_type && projectTypeOptions.length > 0) {
-            setNewProject((prev) => ({ ...prev, project_type: projectTypeOptions[0] }));
-        }
-    }, [projectTypeOptions, newProject.project_type]);
+    // No auto-select default — multi-select should start empty so the admin picks.
+
+    const toggleProjectType = (option: string) => {
+        setNewProject((prev) => {
+            const has = prev.project_type.includes(option);
+            return {
+                ...prev,
+                project_type: has
+                    ? prev.project_type.filter((t) => t !== option)
+                    : [...prev.project_type, option],
+            };
+        });
+    };
 
     const handleCreateProject = async () => {
         if (!newProject.project_name) {
             toast.error("Project Name is required.");
             return;
         }
-        if (!newProject.project_type) {
-            toast.error("Project Type is required.");
+        if (newProject.project_type.length === 0) {
+            toast.error("Pick at least one Project Type.");
             return;
         }
 
@@ -115,7 +140,7 @@ export default function ProjectsPage() {
             project_name: newProject.project_name,
             location: newProject.location,
             status: newProject.status,
-            project_type: newProject.project_type
+            project_type: newProject.project_type,  // TEXT[]
         };
 
         let error;
@@ -138,7 +163,7 @@ export default function ProjectsPage() {
         if (!error) {
             toast.success(editingId ? "Project updated successfully!" : "Project created successfully!");
             setIsNewProjectOpen(false);
-            setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || '' });
+            setNewProject({ project_name: '', location: '', status: 'Planning', project_type: [] });
             setEditingId(null);
             fetchProjects();
         } else {
@@ -150,15 +175,16 @@ export default function ProjectsPage() {
     const handleEditProject = (project: Project) => {
         setEditingId(project.project_id);
         const activeTypeSet = new Set(projectTypeOptions);
-        const resolvedProjectType = project.project_type && activeTypeSet.has(project.project_type)
-            ? project.project_type
-            : (projectTypeOptions[0] || '');
+        const existing = toProjectTypeArray(project.project_type);
+        // Keep only types that are still active in settings, so deactivated types
+        // don't resurface in the form. User can re-check if needed.
+        const resolved = existing.filter((t) => activeTypeSet.has(t));
 
         setNewProject({
             project_name: project.project_name,
             location: project.location || '',
             status: project.status,
-            project_type: resolvedProjectType
+            project_type: resolved,
         });
         setIsNewProjectOpen(true);
     };
@@ -234,7 +260,7 @@ export default function ProjectsPage() {
 
     const openNewProjectModal = () => {
         setEditingId(null);
-        setNewProject({ project_name: '', location: '', status: 'Planning', project_type: projectTypeOptions[0] || '' });
+        setNewProject({ project_name: '', location: '', status: 'Planning', project_type: [] });
         setIsNewProjectOpen(true);
     };
 
@@ -284,35 +310,45 @@ export default function ProjectsPage() {
                                     placeholder="e.g. Mumbai, India"
                                 />
                             </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="project_type" className="text-right text-slate-700">
+                            <div className="grid grid-cols-4 items-start gap-4">
+                                <Label className="text-right text-slate-700 pt-2">
                                     Project Type
                                 </Label>
-                                <div className="col-span-3">
-                                    <Select
-                                        value={newProject.project_type}
-                                        onValueChange={(val: string) => setNewProject({ ...newProject, project_type: val })}
-                                        disabled={projectTypeOptions.length === 0}
-                                    >
-                                        <SelectTrigger className="bg-white text-slate-900 border-slate-300">
-                                            <SelectValue placeholder="Select type" />
-                                        </SelectTrigger>
-                                        <SelectContent className="bg-white border border-slate-200 shadow-xl z-[9999]">
-                                            {projectTypeOptions.map((option) => (
-                                                <SelectItem
-                                                    key={option}
-                                                    className="text-slate-900 focus:bg-gray-100 focus:text-slate-900 cursor-pointer my-1"
-                                                    value={option}
-                                                >
-                                                    {option}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    {projectTypeOptions.length === 0 && (
-                                        <p className="mt-1 text-xs text-red-600">
+                                <div className="col-span-3 space-y-2">
+                                    {projectTypeOptions.length === 0 ? (
+                                        <p className="text-xs text-red-600">
                                             No active project types found. Add/activate from Settings - Dynamic Field Configuration.
                                         </p>
+                                    ) : (
+                                        <>
+                                            <div className="grid grid-cols-2 gap-x-3 gap-y-2 border border-slate-200 rounded-md p-3 bg-slate-50">
+                                                {projectTypeOptions.map((option) => {
+                                                    const checked = newProject.project_type.includes(option);
+                                                    return (
+                                                        <label
+                                                            key={option}
+                                                            className="flex items-center gap-2 cursor-pointer text-sm text-slate-800 select-none"
+                                                        >
+                                                            <input
+                                                                type="checkbox"
+                                                                className="h-4 w-4 accent-blue-600 cursor-pointer"
+                                                                checked={checked}
+                                                                onChange={() => toggleProjectType(option)}
+                                                            />
+                                                            <span>{option}</span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                            <p className="text-xs text-slate-500">
+                                                Tick one or more. Required: at least one selection.
+                                                {newProject.project_type.length > 0 && (
+                                                    <span className="ml-1 font-medium text-slate-700">
+                                                        Selected: {newProject.project_type.join(', ')}.
+                                                    </span>
+                                                )}
+                                            </p>
+                                        </>
                                     )}
                                 </div>
                             </div>
@@ -432,11 +468,24 @@ export default function ProjectsPage() {
                                         </div>
                                     </div>
                                 </CardHeader>
-                                <CardContent className="flex-1 mt-2">
-                                    <div className="flex items-center text-gray-500 text-sm mt-2">
+                                <CardContent className="flex-1 mt-2 space-y-2">
+                                    <div className="flex items-center text-gray-500 text-sm">
                                         <MapPin className="h-4 w-4 mr-1 text-gray-400" />
                                         {project.location || "Unknown Location"}
                                     </div>
+                                    {toProjectTypeArray(project.project_type).length > 0 && (
+                                        <div className="flex flex-wrap gap-1">
+                                            {toProjectTypeArray(project.project_type).map((t) => (
+                                                <Badge
+                                                    key={t}
+                                                    variant="outline"
+                                                    className="text-xs border-slate-300 text-slate-600 bg-white"
+                                                >
+                                                    {t}
+                                                </Badge>
+                                            ))}
+                                        </div>
+                                    )}
                                 </CardContent>
                                 <CardFooter className="pt-4 border-t bg-gray-50/50 rounded-b-lg">
                                     <Link href={`/projects/${project.project_id}`} className="w-full">

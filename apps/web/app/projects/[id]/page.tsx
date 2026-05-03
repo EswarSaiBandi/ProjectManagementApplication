@@ -10,7 +10,7 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-    File, Image, StickyNote, ListTodo, Percent, Triangle, FileText, ShoppingBag, Box, Activity, PieChart, Users, Banknote, ClipboardCheck, Sparkles, Info, Package, Recycle, ArrowDownUp, Calculator, MoreHorizontal
+    File, Image, StickyNote, ListTodo, Percent, FileText, ShoppingBag, Box, Activity, PieChart, Users, Banknote, ClipboardCheck, Info, Package, Recycle, ArrowDownUp, Calculator, MoreHorizontal
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useEffect, useState, useRef } from "react";
@@ -23,7 +23,6 @@ import MoodboardTab from "@/components/project-tabs/MoodboardTab";
 import NotesTab from "@/components/project-tabs/NotesTab";
 import TasksTab from "@/components/project-tabs/TasksTab";
 import QuotesTab from "@/components/project-tabs/QuotesTab";
-import OrdersTab from "@/components/project-tabs/OrdersTab";
 import InvoicesTab from "@/components/project-tabs/InvoicesTab";
 import MaterialRequestTab from "@/components/project-tabs/MaterialRequestTab";
 import ProjectInventoryTab from "@/components/project-tabs/ProjectInventoryTab";
@@ -102,14 +101,12 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
         { label: "Client Progress",    icon: PieChart,      value: "client-progress",       roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Tasks",              icon: ListTodo,      value: "tasks",                 roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Quotes",             icon: Percent,       value: "quotes",                roles: ['Admin','ProjectManager','Client'] },
-        { label: "Orders",             icon: Triangle,      value: "orders",                roles: ['Admin','ProjectManager'] },
         { label: "Invoices",           icon: FileText,      value: "invoices",              roles: ['Admin','ProjectManager'] },
         { label: "Material Request",   icon: ShoppingBag,   value: "purchase-request",      roles: ['Admin','ProjectManager','SiteSupervisor'] },
         { label: "Checklists",         icon: ClipboardCheck,value: "checklists",            roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Files",              icon: File,          value: "files",                 roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Moodboard",          icon: Image,         value: "moodboard",             roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Notes",              icon: StickyNote,    value: "notes",                 roles: ['Admin','ProjectManager','SiteSupervisor'] },
-        { label: "StudioAI",           icon: Sparkles,      value: "studio-ai",             roles: ['Admin','ProjectManager'], special: true },
         { label: "Details",            icon: Info,          value: "details",               roles: ['Admin','ProjectManager','SiteSupervisor','Client'] },
         { label: "Members",            icon: Users,         value: "members",               roles: ['Admin','ProjectManager'] },
     ];
@@ -167,12 +164,10 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                                     value={tab.value}
                                     className={cn(
                                         "rounded-none border-b-2 border-transparent px-3 py-2.5 gap-2 data-[state=active]:shadow-none transition-all whitespace-nowrap text-sm",
-                                        tab.special
-                                            ? "bg-purple-600 text-white hover:bg-purple-700 rounded-md border-b-0 px-4 py-2 data-[state=active]:bg-purple-700 data-[state=active]:text-white font-semibold"
-                                            : "text-gray-500 hover:text-gray-900 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"
+                                        "text-gray-500 hover:text-gray-900 data-[state=active]:border-blue-600 data-[state=active]:text-blue-600"
                                     )}
                                 >
-                                    <tab.icon className={cn("h-4 w-4", tab.special ? "text-white" : "")} />
+                                    <tab.icon className="h-4 w-4" />
                                     <span className="hidden sm:inline">{tab.label}</span>
                                 </TabsTrigger>
                             ))}
@@ -223,7 +218,6 @@ export default function ProjectDetailsPage({ params }: { params: { id: string } 
                     {activeTab === 'client-progress' && <ClientProgressTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'tasks' && <TasksTab projectId={params.id} readOnly={isClient} />}
                     {activeTab === 'quotes' && <QuotesTab projectId={params.id} role={role || null} />}
-                    {activeTab === 'orders' && <OrdersTab projectId={params.id} />}
                     {activeTab === 'invoices' && <InvoicesTab projectId={params.id} />}
                     {activeTab === 'purchase-request' && <MaterialRequestTab projectId={params.id} />}
                     {activeTab === 'checklists' && <ChecklistsTab projectId={params.id} readOnly={isClient} />}

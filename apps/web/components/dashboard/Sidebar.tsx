@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
     LayoutDashboard, FolderKanban, CalendarDays, Users, ListTodo,
     PieChart, Layers, Settings, Target, CalendarOff, HardHat, ClipboardCheck,
+    FileText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -24,6 +25,7 @@ const ALL_NAV_ITEMS = [
     { label: 'Reports',    icon: PieChart,        href: '/reports',    roles: ['Admin', 'ProjectManager', 'SiteSupervisor'] },
     { label: 'Inventory',  icon: Layers,          href: '/inventory',  roles: ['Admin'] },
     { label: 'Manpower',   icon: HardHat,         href: '/manpower',   roles: ['Admin'] },
+    { label: 'Quotations', icon: FileText,        href: '/quotations', roles: ['Admin'] },
 ];
 
 export function Sidebar() {

@@ -426,15 +426,13 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const totalLaborCost      = totalInHouseCost + totalOutsourcedCost;
   const displayedMaterialCost = Number(costSummary?.material_cost_actual ?? 0);
   const displayedTotalActualCost = displayedMaterialCost + totalLaborCost + (costSummary?.expenses_total ?? 0);
-  const displayedCostVariance = (costSummary?.budgeted_total ?? 0) - displayedTotalActualCost;
-  const displayedProfitLoss = (costSummary?.income_total ?? 0) - displayedTotalActualCost;
+  // Per user request: Profit/Loss = Budget − Actual Cost. This treats Budget as
+  // the agreed/quoted revenue for the project. "Total income" (Credit transactions)
+  // is intentionally not surfaced here to keep the view focused.
+  const displayedProfitLoss = (costSummary?.budgeted_total ?? 0) - displayedTotalActualCost;
 
-  const variancePercent = costSummary?.budgeted_total
-    ? ((displayedCostVariance / costSummary.budgeted_total) * 100).toFixed(1)
-    : '0';
-
-  const profitMarginPercent = costSummary?.income_total
-    ? ((displayedProfitLoss / costSummary.income_total) * 100).toFixed(1)
+  const profitMarginPercent = costSummary?.budgeted_total
+    ? ((displayedProfitLoss / costSummary.budgeted_total) * 100).toFixed(1)
     : '0';
 
   return (
@@ -451,36 +449,28 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
           {loading ? (
             <div className="text-center py-8 text-muted-foreground">Loading cost data...</div>
           ) : costSummary ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-              {/* Budget vs Actual */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Card>
                 <CardContent className="pt-4">
-                  <div className="text-xs text-slate-500 mb-1">Budgeted Cost</div>
+                  <div className="text-xs text-slate-500 mb-1">Budget</div>
                   <div className="text-2xl font-bold">₹{costSummary.budgeted_total.toLocaleString('en-IN')}</div>
+                  <div className="text-xs text-slate-500 mt-1">Total planned spend (from Budget Entries below)</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="pt-4">
-                  <div className="text-xs text-slate-500 mb-1">Actual Cost (Live)</div>
+                  <div className="text-xs text-slate-500 mb-1">Actual Cost</div>
                   <div className="text-2xl font-bold text-orange-600">₹{displayedTotalActualCost.toLocaleString('en-IN')}</div>
+                  <div className="text-xs text-slate-500 mt-1">Material + Manpower + Other Expenses</div>
                 </CardContent>
               </Card>
               <Card>
                 <CardContent className="pt-4">
-                  <div className="text-xs text-slate-500 mb-1">Variance</div>
-                  <div className={`text-2xl font-bold ${displayedCostVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {displayedCostVariance >= 0 ? '+' : ''}₹{displayedCostVariance.toLocaleString('en-IN')}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-1">{variancePercent}%</div>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="pt-4">
-                  <div className="text-xs text-slate-500 mb-1">Profit/Loss</div>
+                  <div className="text-xs text-slate-500 mb-1">Profit / Loss</div>
                   <div className={`text-2xl font-bold ${displayedProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
                     {displayedProfitLoss >= 0 ? '+' : ''}₹{displayedProfitLoss.toLocaleString('en-IN')}
                   </div>
-                  <div className="text-xs text-slate-500 mt-1">{profitMarginPercent}% margin</div>
+                  <div className="text-xs text-slate-500 mt-1">Budget − Actual Cost ({profitMarginPercent}%)</div>
                 </CardContent>
               </Card>
             </div>
@@ -963,39 +953,39 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
         </CardContent>
       </Card>
 
-      {/* Variance Analysis */}
+      {/* Budget vs Actual */}
       {costSummary && costSummary.budgeted_total > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Variance Analysis</CardTitle>
+            <CardTitle className="text-lg">Budget vs Actual</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {/* Overall Variance */}
+              {/* Overall Profit/Loss */}
               <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg">
                 <div>
-                  <div className="text-sm text-slate-600">Overall Budget Variance</div>
+                  <div className="text-sm text-slate-600">Profit / Loss</div>
                   <div className="text-xs text-slate-500 mt-1">
-                    Budgeted: ₹{costSummary.budgeted_total.toLocaleString('en-IN')} | 
+                    Budget: ₹{costSummary.budgeted_total.toLocaleString('en-IN')} |
                     Actual: ₹{displayedTotalActualCost.toLocaleString('en-IN')}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className={`text-2xl font-bold ${displayedCostVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {displayedCostVariance >= 0 ? (
+                  <div className={`text-2xl font-bold ${displayedProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {displayedProfitLoss >= 0 ? (
                       <span className="flex items-center gap-2">
                         <TrendingUp className="h-6 w-6" />
-                        +₹{displayedCostVariance.toLocaleString('en-IN')}
+                        +₹{displayedProfitLoss.toLocaleString('en-IN')}
                       </span>
                     ) : (
                       <span className="flex items-center gap-2">
                         <TrendingDown className="h-6 w-6" />
-                        -₹{Math.abs(displayedCostVariance).toLocaleString('en-IN')}
+                        -₹{Math.abs(displayedProfitLoss).toLocaleString('en-IN')}
                       </span>
                     )}
                   </div>
-                  <div className={`text-sm ${displayedCostVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {variancePercent}% {displayedCostVariance >= 0 ? 'under budget' : 'over budget'}
+                  <div className={`text-sm ${displayedProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                    {profitMarginPercent}% {displayedProfitLoss >= 0 ? 'profit margin' : 'loss'}
                   </div>
                 </div>
               </div>
@@ -1061,35 +1051,15 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                 </div>
               </div>
 
-              {/* Income vs Cost */}
-              <div className="mt-6 p-4 bg-gradient-to-r from-green-50 to-blue-50 rounded-lg border">
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
-                  <div>
-                    <div className="text-xs text-slate-600 mb-1">Total Income</div>
-                    <div className="text-xl font-bold text-green-600">₹{costSummary.income_total.toLocaleString('en-IN')}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-600 mb-1">Total Cost</div>
-                    <div className="text-xl font-bold text-orange-600">₹{displayedTotalActualCost.toLocaleString('en-IN')}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-slate-600 mb-1">Net Profit/Loss</div>
-                    <div className={`text-xl font-bold ${displayedProfitLoss >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {displayedProfitLoss >= 0 ? '+' : ''}₹{displayedProfitLoss.toLocaleString('en-IN')}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Cost Health Indicator */}
+              {/* Health Indicator */}
               <div className="mt-4 flex items-center gap-3 p-3 rounded-lg border bg-white">
-                {displayedCostVariance >= 0 ? (
+                {displayedProfitLoss >= 0 ? (
                   <>
                     <CheckCircle className="h-6 w-6 text-green-600" />
                     <div>
-                      <div className="font-medium text-green-700">Project is Under Budget</div>
+                      <div className="font-medium text-green-700">In profit</div>
                       <div className="text-sm text-slate-600">
-                        You have ₹{displayedCostVariance.toLocaleString('en-IN')} remaining from budget
+                        ₹{displayedProfitLoss.toLocaleString('en-IN')} left from budget after actual cost.
                       </div>
                     </div>
                   </>
@@ -1097,9 +1067,9 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                   <>
                     <AlertCircle className="h-6 w-6 text-red-600" />
                     <div>
-                      <div className="font-medium text-red-700">Project is Over Budget</div>
+                      <div className="font-medium text-red-700">In loss</div>
                       <div className="text-sm text-slate-600">
-                        You have exceeded budget by ₹{Math.abs(displayedCostVariance).toLocaleString('en-IN')}
+                        Actual cost has exceeded budget by ₹{Math.abs(displayedProfitLoss).toLocaleString('en-IN')}.
                       </div>
                     </div>
                   </>
@@ -1118,12 +1088,12 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
             <div className="text-sm text-blue-800">
               <div className="font-semibold mb-2">How Dynamic Costing Works:</div>
               <ul className="space-y-1 list-disc list-inside">
-                <li><strong>Material Costs</strong>: From stock used (cost per unit) when set; otherwise from outward movements</li>
-                <li><strong>In-house</strong>: (Monthly Salary ÷ 24) × Bandwidth % × Working Days — from the Manpower tab</li>
-                <li><strong>Outsourced</strong>: Daily Wage × Working Days + Incentive — from the Manpower tab</li>
-                <li><strong>Budget Entries</strong>: Planned amounts by category — used for variance vs actual</li>
-                <li><strong>Project Expenses</strong>: Actual travel, food, and other spend recorded below — plus debit transactions — count toward total cost</li>
-                <li><strong>Profit/Loss</strong>: Income (credit transactions) minus material, manpower, and other expenses</li>
+                <li><strong>Budget</strong>: Sum of Budget Entries below (your planned / quoted amount).</li>
+                <li><strong>Actual Cost</strong>: Material + Manpower + Other Expenses, recomputed live.</li>
+                <li><strong>Material Costs</strong>: FIFO cost of stock consumed (Stock Used, net of reverts).</li>
+                <li><strong>Manpower</strong>: In-house = (Monthly Salary ÷ 24) × Bandwidth % × Days. Outsourced = Daily Wage × Days + Incentive.</li>
+                <li><strong>Other Expenses</strong>: Debit transactions + Project Expenses recorded below.</li>
+                <li><strong>Profit / Loss</strong>: Budget − Actual Cost. Positive means profit; negative means in loss.</li>
               </ul>
             </div>
           </div>
