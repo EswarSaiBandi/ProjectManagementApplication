@@ -17,13 +17,25 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { supabase } from '@/lib/supabase';
-import { Plus, Package, Pause, Play, Upload, IndianRupee, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
+import {
+  Plus, Package, Pause, Play, Upload, IndianRupee,
+  AlertTriangle, ChevronDown, ChevronRight, Layers,
+} from 'lucide-react';
 import { toast } from 'sonner';
+
+// ─── Interfaces ──────────────────────────────────────────────────────────────
 
 interface Material {
   material_id: number;
   material_name: string;
   metric: string;
+}
+
+interface QuantityVariant {
+  variant_id: number;
+  material_id: number;
+  variant_name: string;         // e.g. "50 kg Bag"
+  quantity_per_unit: number;    // e.g. 50
 }
 
 interface VariantRow {
@@ -34,11 +46,15 @@ interface VariantRow {
   variant_name: string;
   unit_price: number;
   is_active: boolean;
+  quantity_variant_id: number;
+  quantity_variant_name: string | null;
+  quantity_per_unit: number | null;
   batch_count: number;
   earliest_batch_date: string | null;
   latest_batch_date: string | null;
   quantity_received: number;
   quantity_available: number;
+  total_units: number;
   stock_value: number;
 }
 
@@ -49,11 +65,16 @@ interface BatchRow {
   quantity_received: number;
   quantity_available: number;
   quantity_outflow: number;
+  number_of_units: number | null;
+  quantity_variant_name: string | null;
+  quantity_per_unit: number | null;
   stock_value: number;
   invoice_number: string | null;
   bill_path: string | null;
   notes: string | null;
 }
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const BILL_BUCKET = 'material-invoices';
 
@@ -61,66 +82,100 @@ function safeFileName(name: string): string {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_');
 }
 
+function fmtNum(n: number | null | undefined, decimals = 3): string {
+  return Number(n ?? 0).toFixed(decimals);
+}
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
 export default function PriceVariantsTab() {
   const [materials, setMaterials] = useState<Material[]>([]);
+  const [qtyVariants, setQtyVariants] = useState<QuantityVariant[]>([]);
   const [rows, setRows] = useState<VariantRow[]>([]);
   const [batches, setBatches] = useState<BatchRow[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
 
+  // --- Create price-variant dialog ---
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState({
     material_id: '',
-    variant_name: '',
-    unit_price: '',
+    quantity_variant_id: '',   // selected qty variant (packaging size)
+    variant_name: '',          // custom label for this price tier
+    price_per_pkg: '',         // Rs. per packaging unit (e.g. per 50 kg Bag); divided by qty_per_unit before saving
     notes: '',
   });
   const [creating, setCreating] = useState(false);
 
+  // --- Add stock dialog ---
   const [addStockOpen, setAddStockOpen] = useState(false);
   const [addStockForm, setAddStockForm] = useState({
     material_id: '',
-    variant_id: '',
-    quantity: '',
+    variant_id: '',            // price variant id
+    number_of_units: '',       // number of bags / cans / etc.
     invoice_number: '',
     notes: '',
   });
   const [addStockFile, setAddStockFile] = useState<File | null>(null);
   const [addingStock, setAddingStock] = useState(false);
 
+  // --- Toggle / Reduce ---
   const [togglingId, setTogglingId] = useState<number | null>(null);
-
   const [reduceOpen, setReduceOpen] = useState(false);
-  const [reduceForm, setReduceForm] = useState({ material_id: '', quantity: '', reason: '' });
+  const [reduceForm, setReduceForm] = useState({
+    material_id: '',
+    quantity_variant_id: '',   // '' = all packaging; otherwise qty_variant_id
+    units: '',                 // number of packaging units when MV selected
+    quantity: '',               // base-metric qty when MV not selected
+    reason: '',
+  });
   const [reducing, setReducing] = useState(false);
+
+  // ─── Data fetching ─────────────────────────────────────────────────────────
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const [matRes, rowRes, batchRes] = await Promise.all([
+    const [matRes, qvRes, rowRes, batchRes] = await Promise.all([
       supabase
         .from('materials_master')
         .select('material_id, material_name, metric')
         .eq('is_active', true)
         .order('material_name'),
+
+      supabase
+        .from('material_variants')
+        .select('variant_id, material_id, variant_name, quantity_per_unit')
+        .eq('is_active', true)
+        .order('material_id')
+        .order('quantity_per_unit', { ascending: false }),
+
       supabase
         .from('material_stock_variants_admin')
         .select('*')
         .order('material_name')
         .order('earliest_batch_date', { ascending: true, nullsFirst: false }),
+
       supabase
         .from('material_stock_batches_admin')
-        .select('batch_id, variant_id, batch_date, quantity_received, quantity_available, quantity_outflow, stock_value, invoice_number, bill_path, notes')
+        .select(
+          'batch_id, variant_id, batch_date, quantity_received, quantity_available, ' +
+          'quantity_outflow, number_of_units, quantity_variant_name, quantity_per_unit, ' +
+          'stock_value, invoice_number, bill_path, notes'
+        )
         .order('batch_date', { ascending: true })
         .order('batch_id', { ascending: true }),
     ]);
 
-    if (matRes.error) toast.error('Failed to load materials: ' + matRes.error.message);
+    if (matRes.error)   toast.error('Failed to load materials: '      + matRes.error.message);
     else setMaterials(matRes.data || []);
 
-    if (rowRes.error) toast.error('Failed to load price variants: ' + rowRes.error.message);
+    if (qvRes.error)    toast.error('Failed to load qty variants: '   + qvRes.error.message);
+    else setQtyVariants((qvRes.data as QuantityVariant[]) || []);
+
+    if (rowRes.error)   toast.error('Failed to load price variants: ' + rowRes.error.message);
     else setRows((rowRes.data as VariantRow[]) || []);
 
-    if (batchRes.error) toast.error('Failed to load batches: ' + batchRes.error.message);
+    if (batchRes.error) toast.error('Failed to load batches: '        + batchRes.error.message);
     else setBatches((batchRes.data as BatchRow[]) || []);
 
     setLoading(false);
@@ -128,22 +183,23 @@ export default function PriceVariantsTab() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  // ------------------------------------------------------------------ Grouping
+  // ─── Derived data ──────────────────────────────────────────────────────────
 
   const groupedByMaterial = useMemo(() => {
-    const map = new Map<number, { material_name: string; variants: VariantRow[] }>();
+    const map = new Map<number, { material_name: string; metric: string | null; variants: VariantRow[] }>();
     for (const r of rows) {
       if (!map.has(r.material_id)) {
-        map.set(r.material_id, { material_name: r.material_name, variants: [] });
+        map.set(r.material_id, { material_name: r.material_name, metric: r.metric, variants: [] });
       }
       map.get(r.material_id)!.variants.push(r);
     }
     return Array.from(map.entries()).map(([material_id, v]) => ({
       material_id,
       material_name: v.material_name,
+      metric: v.metric,
       variants: v.variants,
-      total_qty: v.variants.reduce((s, x) => s + Number(x.quantity_available || 0), 0),
-      total_value: v.variants.reduce((s, x) => s + Number(x.stock_value || 0), 0),
+      total_qty:   v.variants.reduce((s, x) => s + Number(x.quantity_available ?? 0), 0),
+      total_value: v.variants.reduce((s, x) => s + Number(x.stock_value ?? 0), 0),
     }));
   }, [rows]);
 
@@ -157,24 +213,62 @@ export default function PriceVariantsTab() {
     return map;
   }, [rows]);
 
-  // ------------------------------------------------------------------ Actions
+  const qtyVariantsByMaterial = useMemo(() => {
+    const map = new Map<number, QuantityVariant[]>();
+    for (const qv of qtyVariants) {
+      if (!map.has(qv.material_id)) map.set(qv.material_id, []);
+      map.get(qv.material_id)!.push(qv);
+    }
+    return map;
+  }, [qtyVariants]);
+
+  const materialsWithStock = useMemo(() => {
+    const byId = new Map<number, number>();
+    for (const r of rows) {
+      byId.set(r.material_id, (byId.get(r.material_id) || 0) + Number(r.quantity_available ?? 0));
+    }
+    return materials
+      .map((m) => ({ ...m, available: byId.get(m.material_id) || 0 }))
+      .filter((m) => m.available > 0);
+  }, [materials, rows]);
+
+  // ─── Create price variant ──────────────────────────────────────────────────
 
   const resetCreateForm = () => setCreateForm({
-    material_id: '', variant_name: '', unit_price: '', notes: '',
+    material_id: '', quantity_variant_id: '', variant_name: '', price_per_pkg: '', notes: '',
   });
 
+  const selectedCreateMaterial = createForm.material_id
+    ? materials.find((m) => m.material_id === parseInt(createForm.material_id))
+    : null;
+
+  const createQtyVariantOptions = createForm.material_id
+    ? (qtyVariantsByMaterial.get(parseInt(createForm.material_id)) || [])
+    : [];
+
+  const selectedCreateQtyVariant = createForm.quantity_variant_id
+    ? createQtyVariantOptions.find((qv) => qv.variant_id === parseInt(createForm.quantity_variant_id))
+    : null;
+
   const handleCreate = async () => {
-    if (!createForm.material_id) { toast.error('Select a material'); return; }
-    if (!createForm.variant_name.trim()) { toast.error('Variant name is required'); return; }
-    const price = parseFloat(createForm.unit_price);
-    if (!price || price <= 0) { toast.error('Unit price must be > 0'); return; }
+    if (!createForm.material_id)          { toast.error('Select a material');                       return; }
+    if (!createForm.quantity_variant_id)  { toast.error('Select a packaging / quantity variant');   return; }
+    if (!createForm.variant_name.trim())  { toast.error('Variant name is required');                return; }
+
+    const pricePerPkg = parseFloat(createForm.price_per_pkg);
+    if (!pricePerPkg || pricePerPkg <= 0) { toast.error('Price per packaging unit must be > 0');    return; }
+    if (!selectedCreateQtyVariant)        { toast.error('Select a packaging variant to set price'); return; }
+
+    // Convert price-per-pkg → price-per-base-metric-unit for storage.
+    const unitPrice = pricePerPkg / selectedCreateQtyVariant.quantity_per_unit;
 
     setCreating(true);
     const { error } = await supabase.rpc('create_price_variant', {
-      p_material_id: parseInt(createForm.material_id),
-      p_variant_name: createForm.variant_name.trim(),
-      p_unit_price: price,
-      p_notes: createForm.notes.trim() || null,
+      p_material_id:         parseInt(createForm.material_id),
+      p_variant_name:        createForm.variant_name.trim(),
+      p_unit_price:          unitPrice,
+      p_quantity_variant_id: parseInt(createForm.quantity_variant_id),
+      p_notes:               createForm.notes.trim() || null,
     });
     setCreating(false);
 
@@ -185,18 +279,42 @@ export default function PriceVariantsTab() {
     fetchAll();
   };
 
+  // Auto-suggest variant name: "50 kg Bag @ Rs.300/bag"
+  const autoSuggestVariantName = (
+    qvName: string | undefined,
+    pricePerPkg: string,
+  ) => {
+    if (!qvName) return '';
+    const priceStr = pricePerPkg ? ` @ Rs.${parseFloat(pricePerPkg).toFixed(2)}/bag` : '';
+    return `${qvName}${priceStr}`;
+  };
+
+  // ─── Add stock ─────────────────────────────────────────────────────────────
+
   const resetAddStockForm = () => {
-    setAddStockForm({
-      material_id: '', variant_id: '', quantity: '',
-      invoice_number: '', notes: '',
-    });
+    setAddStockForm({ material_id: '', variant_id: '', number_of_units: '', invoice_number: '', notes: '' });
     setAddStockFile(null);
   };
 
+  const selectedAddStockVariant = addStockForm.variant_id
+    ? rows.find((r) => r.variant_id === parseInt(addStockForm.variant_id))
+    : null;
+
+  const addStockVariantOptions = addStockForm.material_id
+    ? (activeVariantsByMaterial.get(parseInt(addStockForm.material_id)) || [])
+    : [];
+
+  const computedTotalQty = useMemo(() => {
+    const units = parseFloat(addStockForm.number_of_units);
+    if (!units || units <= 0 || !selectedAddStockVariant) return null;
+    const qtyPerUnit = selectedAddStockVariant.quantity_per_unit ?? 1;
+    return units * qtyPerUnit;
+  }, [addStockForm.number_of_units, selectedAddStockVariant]);
+
   const handleAddStock = async () => {
-    if (!addStockForm.variant_id) { toast.error('Select a variant'); return; }
-    const qty = parseFloat(addStockForm.quantity);
-    if (!qty || qty <= 0) { toast.error('Quantity must be > 0'); return; }
+    if (!addStockForm.variant_id) { toast.error('Select a price variant'); return; }
+    const units = parseFloat(addStockForm.number_of_units);
+    if (!units || units <= 0)     { toast.error('Number of units must be > 0'); return; }
 
     setAddingStock(true);
     let billPath: string | null = null;
@@ -218,35 +336,54 @@ export default function PriceVariantsTab() {
     }
 
     const { error } = await supabase.rpc('add_stock_to_store', {
-      p_variant_id: parseInt(addStockForm.variant_id),
-      p_quantity: qty,
-      p_bill_path: billPath,
-      p_invoice_number: addStockForm.invoice_number.trim() || null,
-      p_notes: addStockForm.notes.trim() || null,
+      p_variant_id:      parseInt(addStockForm.variant_id),
+      p_number_of_units: units,
+      p_bill_path:       billPath,
+      p_invoice_number:  addStockForm.invoice_number.trim() || null,
+      p_notes:           addStockForm.notes.trim() || null,
     });
     setAddingStock(false);
 
     if (error) { toast.error(error.message); return; }
-    toast.success('Stock added');
+    toast.success('Stock added successfully');
     setAddStockOpen(false);
     resetAddStockForm();
     fetchAll();
     window.dispatchEvent(new CustomEvent('store-stock-updated'));
   };
 
-  const resetReduceForm = () => setReduceForm({ material_id: '', quantity: '', reason: '' });
+  // ─── Damage / Write-off (LIFO) ─────────────────────────────────────────────
+
+  const resetReduceForm = () =>
+    setReduceForm({ material_id: '', quantity_variant_id: '', units: '', quantity: '', reason: '' });
 
   const handleReduce = async () => {
-    if (!reduceForm.material_id) { toast.error('Select a material'); return; }
-    const qty = parseFloat(reduceForm.quantity);
-    if (!qty || qty <= 0) { toast.error('Quantity must be > 0'); return; }
-    if (!reduceForm.reason.trim()) { toast.error('Reason is required'); return; }
+    if (!reduceForm.material_id)   { toast.error('Select a material');   return; }
+    if (!reduceForm.reason.trim()) { toast.error('Reason is required');   return; }
+
+    const qvId = reduceForm.quantity_variant_id
+      ? parseInt(reduceForm.quantity_variant_id)
+      : null;
+
+    // When a packaging is picked, input is physical units → qty = units × qpu.
+    // When not, input is raw base-metric qty.
+    let qty: number;
+    if (qvId !== null) {
+      const units = parseFloat(reduceForm.units);
+      if (!units || units <= 0) { toast.error('Units must be > 0'); return; }
+      const qpu = rows.find(r => r.quantity_variant_id === qvId && r.material_id === parseInt(reduceForm.material_id))?.quantity_per_unit ?? 1;
+      qty = units * qpu;
+    } else {
+      qty = parseFloat(reduceForm.quantity);
+      if (!qty || qty <= 0) { toast.error('Quantity must be > 0'); return; }
+    }
 
     setReducing(true);
     const { data, error } = await supabase.rpc('reduce_store_stock_lifo', {
       p_material_id: parseInt(reduceForm.material_id),
-      p_quantity: qty,
-      p_reason: reduceForm.reason.trim(),
+      p_quantity:    qty,
+      p_reason:      reduceForm.reason.trim(),
+      ...(qvId !== null && { p_qty_variant_id: qvId }),
     });
     setReducing(false);
 
@@ -260,35 +397,21 @@ export default function PriceVariantsTab() {
     window.dispatchEvent(new CustomEvent('store-stock-updated'));
   };
 
-  const materialsWithStock = useMemo(() => {
-    const byId = new Map<number, number>();
-    for (const r of rows) {
-      byId.set(r.material_id, (byId.get(r.material_id) || 0) + Number(r.quantity_available || 0));
-    }
-    return materials
-      .map((m) => ({ ...m, available: byId.get(m.material_id) || 0 }))
-      .filter((m) => m.available > 0);
-  }, [materials, rows]);
+  // ─── Toggle active ─────────────────────────────────────────────────────────
 
   const handleToggle = async (variant_id: number, next_active: boolean) => {
     setTogglingId(variant_id);
     const { error } = await supabase.rpc('toggle_price_variant_status', {
       p_variant_id: variant_id,
-      p_is_active: next_active,
+      p_is_active:  next_active,
     });
     setTogglingId(null);
-
     if (error) { toast.error(error.message); return; }
     toast.success(next_active ? 'Variant activated' : 'Variant paused');
     fetchAll();
   };
 
-  // ------------------------------------------------------------------ Render
-
-  const selectedAddStockMaterial = addStockForm.material_id ? parseInt(addStockForm.material_id) : null;
-  const addStockVariantOptions = selectedAddStockMaterial != null
-    ? (activeVariantsByMaterial.get(selectedAddStockMaterial) || [])
-    : [];
+  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <Card className="bg-white shadow-sm">
@@ -296,17 +419,18 @@ export default function PriceVariantsTab() {
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2">
             <Package className="h-5 w-5 text-blue-600" />
-            Price Variants (FIFO Store Stock)
+            Price Variants &amp; Stock (FIFO)
           </CardTitle>
           <div className="flex gap-2">
-            {/* Create Variant */}
+
+            {/* ── Create Price Variant ── */}
             <Dialog
               open={createOpen}
               onOpenChange={(o) => { setCreateOpen(o); if (!o) resetCreateForm(); }}
             >
               <DialogTrigger asChild>
                 <Button variant="outline">
-                  <Plus className="h-4 w-4 mr-2" /> New Variant
+                  <Plus className="h-4 w-4 mr-2" /> New Price Variant
                 </Button>
               </DialogTrigger>
               <DialogContent className="bg-white max-w-md">
@@ -314,13 +438,22 @@ export default function PriceVariantsTab() {
                   <DialogTitle>Create Price Variant</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
+
+                  {/* Material */}
                   <div className="space-y-2">
                     <Label>Material *</Label>
                     <Select
                       value={createForm.material_id}
-                      onValueChange={(v) => setCreateForm({ ...createForm, material_id: v })}
+                      onValueChange={(v) => setCreateForm({
+                        ...createForm,
+                        material_id: v,
+                        quantity_variant_id: '',
+                        variant_name: '',
+                      })}
                     >
-                      <SelectTrigger className="bg-white"><SelectValue placeholder="Select material" /></SelectTrigger>
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select material" />
+                      </SelectTrigger>
                       <SelectContent className="bg-white">
                         {materials.map((m) => (
                           <SelectItem key={m.material_id} value={m.material_id.toString()}>
@@ -330,27 +463,103 @@ export default function PriceVariantsTab() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Quantity Variant (packaging size) */}
                   <div className="space-y-2">
-                    <Label>Variant Name *</Label>
+                    <Label className="flex items-center gap-1">
+                      <Layers className="h-3.5 w-3.5 text-green-600" />
+                      Packaging / Quantity Variant *
+                    </Label>
+                    <Select
+                      value={createForm.quantity_variant_id}
+                      onValueChange={(v) => {
+                        const qv = createQtyVariantOptions.find(
+                          (qv) => qv.variant_id === parseInt(v)
+                        );
+                        setCreateForm({
+                          ...createForm,
+                          quantity_variant_id: v,
+                          variant_name: autoSuggestVariantName(
+                            qv?.variant_name,
+                            createForm.price_per_pkg,
+                          ),
+                        });
+                      }}
+                      disabled={!createForm.material_id}
+                    >
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder={
+                          createForm.material_id
+                            ? (createQtyVariantOptions.length ? 'Select packaging size' : 'No quantity variants — add them in Materials page')
+                            : 'Pick a material first'
+                        } />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white">
+                        {createQtyVariantOptions.map((qv) => (
+                          <SelectItem key={qv.variant_id} value={qv.variant_id.toString()}>
+                            {qv.variant_name} — {qv.quantity_per_unit} {selectedCreateMaterial?.metric}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {selectedCreateQtyVariant && (
+                      <p className="text-xs text-green-700 bg-green-50 rounded px-2 py-1">
+                        Each <strong>{selectedCreateQtyVariant.variant_name}</strong> contains{' '}
+                        <strong>{selectedCreateQtyVariant.quantity_per_unit} {selectedCreateMaterial?.metric}</strong>.
+                        When adding stock you enter the number of bags/units — total quantity is auto-computed.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Price per packaging unit */}
+                  <div className="space-y-2">
+                    <Label>
+                      Price per {selectedCreateQtyVariant?.variant_name ?? 'packaging unit'} (Rs.) *
+                    </Label>
+                    <Input
+                      type="number" step="0.01" min="0"
+                      value={createForm.price_per_pkg}
+                      onChange={(e) => {
+                        setCreateForm({
+                          ...createForm,
+                          price_per_pkg: e.target.value,
+                          variant_name: autoSuggestVariantName(
+                            selectedCreateQtyVariant?.variant_name,
+                            e.target.value,
+                          ),
+                        });
+                      }}
+                      placeholder={selectedCreateQtyVariant ? `e.g. ${selectedCreateQtyVariant.quantity_per_unit * 6}` : 'Select packaging first'}
+                      disabled={!selectedCreateQtyVariant}
+                    />
+                    {selectedCreateQtyVariant && createForm.price_per_pkg && (
+                      <div className="text-xs space-y-0.5">
+                        <p className="text-blue-700 font-medium">
+                          = Rs.&nbsp;
+                          {(parseFloat(createForm.price_per_pkg) / selectedCreateQtyVariant.quantity_per_unit).toFixed(4)}
+                          &nbsp;per {selectedCreateMaterial?.metric ?? 'unit'} (stored rate)
+                        </p>
+                        <p className="text-slate-400">
+                          FIFO cost is calculated at this per-{selectedCreateMaterial?.metric ?? 'unit'} rate.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Variant Name */}
+                  <div className="space-y-2">
+                    <Label>Price Variant Label *</Label>
                     <Input
                       value={createForm.variant_name}
                       onChange={(e) => setCreateForm({ ...createForm, variant_name: e.target.value })}
-                      placeholder="e.g. price_var_1"
+                      placeholder="e.g. 50 kg Bag @ Rs.6/kg"
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Unit Price (Rs.) *</Label>
-                    <Input
-                      type="number" step="0.01" min="0"
-                      value={createForm.unit_price}
-                      onChange={(e) => setCreateForm({ ...createForm, unit_price: e.target.value })}
-                      placeholder="e.g. 150.00"
-                    />
-                    <p className="text-xs text-slate-500">
-                      Two active variants for the same material cannot share the same price.
-                      FIFO order follows variant creation order automatically.
+                    <p className="text-xs text-slate-400">
+                      Unique label for this price tier. Auto-suggested when a packaging variant is selected.
                     </p>
                   </div>
+
+                  {/* Notes */}
                   <div className="space-y-2">
                     <Label>Notes</Label>
                     <Textarea
@@ -371,7 +580,7 @@ export default function PriceVariantsTab() {
               </DialogContent>
             </Dialog>
 
-            {/* Damage / Write-off */}
+            {/* ── Damage / Write-off ── */}
             <Dialog
               open={reduceOpen}
               onOpenChange={(o) => { setReduceOpen(o); if (!o) resetReduceForm(); }}
@@ -390,9 +599,17 @@ export default function PriceVariantsTab() {
                     <Label>Material *</Label>
                     <Select
                       value={reduceForm.material_id}
-                      onValueChange={(v) => setReduceForm({ ...reduceForm, material_id: v })}
+                      onValueChange={(v) => setReduceForm({
+                        ...reduceForm,
+                        material_id: v,
+                        quantity_variant_id: '',
+                        units: '',
+                        quantity: '',
+                      })}
                     >
-                      <SelectTrigger className="bg-white"><SelectValue placeholder="Select material" /></SelectTrigger>
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select material" />
+                      </SelectTrigger>
                       <SelectContent className="bg-white">
                         {materialsWithStock.length === 0 ? (
                           <div className="px-3 py-2 text-sm text-slate-500">
@@ -406,30 +623,124 @@ export default function PriceVariantsTab() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>Quantity to Reduce *</Label>
-                    <Input
-                      type="number" step="0.001" min="0"
-                      value={reduceForm.quantity}
-                      onChange={(e) => setReduceForm({ ...reduceForm, quantity: e.target.value })}
-                      placeholder="e.g. 5"
-                    />
-                    <p className="text-xs text-slate-500">
-                      LIFO: newest (most-recently-priced) stock is consumed first, so the store retains older-priced inventory.
-                    </p>
-                  </div>
+
+                  {/* Packaging variant (MV) picker + units/qty input — derived from selected material. */}
+                  {(() => {
+                    if (!reduceForm.material_id) return null;
+                    const matId = parseInt(reduceForm.material_id);
+                    const metric = rows.find(r => r.material_id === matId)?.metric || '';
+
+                    // Aggregate per-packaging availability across price variants of this material.
+                    type PkgAgg = {
+                      qty_variant_id: number;
+                      qty_variant_name: string;
+                      quantity_per_unit: number | null;
+                      available: number;
+                    };
+                    const pkgMap = new Map<number, PkgAgg>();
+                    rows.filter(r => r.material_id === matId).forEach(r => {
+                      const key = r.quantity_variant_id;
+                      if (!pkgMap.has(key)) {
+                        pkgMap.set(key, {
+                          qty_variant_id:    key,
+                          qty_variant_name:  r.quantity_variant_name ?? r.variant_name,
+                          quantity_per_unit: r.quantity_per_unit,
+                          available:         0,
+                        });
+                      }
+                      pkgMap.get(key)!.available += Number(r.quantity_available ?? 0);
+                    });
+                    const pkgList = Array.from(pkgMap.values()).filter(p => p.available > 0);
+
+                    const qvIdStr = reduceForm.quantity_variant_id;
+                    const selectedPkg = qvIdStr ? pkgMap.get(parseInt(qvIdStr)) ?? null : null;
+                    const qpu = selectedPkg?.quantity_per_unit ?? null;
+                    const unitsN = parseFloat(reduceForm.units);
+                    const derivedQty = selectedPkg && qpu && Number.isFinite(unitsN) && unitsN > 0
+                      ? unitsN * qpu
+                      : null;
+
+                    return (
+                      <>
+                        <div className="space-y-2">
+                          <Label>Packaging Variant</Label>
+                          <Select
+                            value={reduceForm.quantity_variant_id || '__ALL__'}
+                            onValueChange={(v) => setReduceForm({
+                              ...reduceForm,
+                              quantity_variant_id: v === '__ALL__' ? '' : v,
+                              units: '',
+                              quantity: '',
+                            })}
+                          >
+                            <SelectTrigger className="bg-white">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="bg-white">
+                              <SelectItem value="__ALL__">All packaging (LIFO across everything)</SelectItem>
+                              {pkgList.map((pv) => (
+                                <SelectItem key={pv.qty_variant_id} value={pv.qty_variant_id.toString()}>
+                                  {pv.qty_variant_name} — {pv.available.toFixed(3)} {metric} available
+                                  {pv.quantity_per_unit ? ` (${(pv.available / pv.quantity_per_unit).toFixed(2)} units)` : ''}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {selectedPkg && qpu ? (
+                          <div className="space-y-2">
+                            <Label>Number of {selectedPkg.qty_variant_name}s *</Label>
+                            <Input
+                              type="number" step="0.5" min="0"
+                              value={reduceForm.units}
+                              onChange={(e) => setReduceForm({ ...reduceForm, units: e.target.value })}
+                              placeholder={`e.g. ${Math.floor(selectedPkg.available / qpu)}`}
+                            />
+                            {derivedQty !== null && (
+                              <div className="text-xs bg-red-50 border border-red-100 rounded px-3 py-1.5 text-red-700 font-medium">
+                                = {derivedQty.toFixed(3)} {metric}
+                                <span className="text-red-400 font-normal ml-1">
+                                  ({reduceForm.units} × {qpu} {metric})
+                                </span>
+                              </div>
+                            )}
+                            <p className="text-xs text-slate-500">
+                              LIFO within this packaging: newest batches of {selectedPkg.qty_variant_name} consumed first.
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <Label>Quantity to Reduce (in base metric) *</Label>
+                            <Input
+                              type="number" step="0.001" min="0"
+                              value={reduceForm.quantity}
+                              onChange={(e) => setReduceForm({ ...reduceForm, quantity: e.target.value })}
+                              placeholder="e.g. 5"
+                            />
+                            <p className="text-xs text-slate-500">
+                              LIFO across all packaging: newest stock consumed first, retaining older-priced inventory.
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+
                   <div className="space-y-2">
                     <Label>Reason *</Label>
                     <Textarea
                       rows={2}
                       value={reduceForm.reason}
                       onChange={(e) => setReduceForm({ ...reduceForm, reason: e.target.value })}
-                      placeholder="e.g. Damaged in handling, transfer to warehouse B, expired..."
+                      placeholder="e.g. Damaged, expired, transfer-out…"
                     />
                   </div>
                 </div>
                 <DialogFooter>
-                  <Button variant="outline" onClick={() => setReduceOpen(false)} disabled={reducing}>Cancel</Button>
+                  <Button variant="outline" onClick={() => setReduceOpen(false)} disabled={reducing}>
+                    Cancel
+                  </Button>
                   <Button onClick={handleReduce} disabled={reducing} className="bg-red-600 hover:bg-red-700">
                     {reducing ? 'Reducing…' : 'Reduce Stock'}
                   </Button>
@@ -437,7 +748,7 @@ export default function PriceVariantsTab() {
               </DialogContent>
             </Dialog>
 
-            {/* Add Stock */}
+            {/* ── Add Stock ── */}
             <Dialog
               open={addStockOpen}
               onOpenChange={(o) => { setAddStockOpen(o); if (!o) resetAddStockForm(); }}
@@ -447,18 +758,24 @@ export default function PriceVariantsTab() {
                   <Plus className="h-4 w-4 mr-2" /> Add Stock
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-white max-w-md max-h-[85vh] overflow-y-auto">
+              <DialogContent className="bg-white max-w-md max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Add Stock to Store</DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
+
+                  {/* Material */}
                   <div className="space-y-2">
                     <Label>Material *</Label>
                     <Select
                       value={addStockForm.material_id}
-                      onValueChange={(v) => setAddStockForm({ ...addStockForm, material_id: v, variant_id: '' })}
+                      onValueChange={(v) => setAddStockForm({
+                        ...addStockForm, material_id: v, variant_id: '', number_of_units: '',
+                      })}
                     >
-                      <SelectTrigger className="bg-white"><SelectValue placeholder="Select material" /></SelectTrigger>
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select material" />
+                      </SelectTrigger>
                       <SelectContent className="bg-white">
                         {materials.map((m) => (
                           <SelectItem key={m.material_id} value={m.material_id.toString()}>
@@ -468,38 +785,108 @@ export default function PriceVariantsTab() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {/* Price Variant */}
                   <div className="space-y-2">
                     <Label>Price Variant *</Label>
                     <Select
                       value={addStockForm.variant_id}
-                      onValueChange={(v) => setAddStockForm({ ...addStockForm, variant_id: v })}
+                      onValueChange={(v) => setAddStockForm({
+                        ...addStockForm, variant_id: v, number_of_units: '',
+                      })}
                       disabled={!addStockForm.material_id}
                     >
                       <SelectTrigger className="bg-white">
-                        <SelectValue placeholder={addStockForm.material_id ? 'Select variant' : 'Pick a material first'} />
+                        <SelectValue placeholder={
+                          addStockForm.material_id ? 'Select price variant' : 'Pick a material first'
+                        } />
                       </SelectTrigger>
                       <SelectContent className="bg-white">
                         {addStockVariantOptions.length === 0 ? (
                           <div className="px-3 py-2 text-sm text-slate-500">
-                            No active variants. Create one first.
+                            No active price variants. Create one first.
                           </div>
                         ) : addStockVariantOptions.map((v) => (
                           <SelectItem key={v.variant_id} value={v.variant_id.toString()}>
-                            {v.variant_name} (Rs. {Number(v.unit_price).toFixed(2)})
+                            {v.quantity_variant_name && v.quantity_per_unit
+                              ? `${v.quantity_variant_name} — Rs. ${(Number(v.unit_price) * Number(v.quantity_per_unit)).toFixed(2)}/bag`
+                              : `${v.variant_name} (Rs. ${Number(v.unit_price).toFixed(2)})`
+                            }
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+
+                    {/* Show linked qty variant info */}
+                    {selectedAddStockVariant?.quantity_variant_name && (
+                      <div className="bg-green-50 border border-green-200 rounded p-3 space-y-1">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-green-800">
+                          <Layers className="h-3.5 w-3.5" />
+                          Packaging: {selectedAddStockVariant.quantity_variant_name}
+                        </div>
+                        <p className="text-xs text-green-700">
+                          Each <strong>{selectedAddStockVariant.quantity_variant_name}</strong>
+                          {' = '}
+                          <strong>{selectedAddStockVariant.quantity_per_unit} {selectedAddStockVariant.metric}</strong>
+                          {' at '}
+                          <strong>
+                            Rs. {(Number(selectedAddStockVariant.unit_price) * Number(selectedAddStockVariant.quantity_per_unit)).toFixed(2)}
+                            /{selectedAddStockVariant.quantity_variant_name}
+                          </strong>
+                          <span className="text-green-600 ml-1">
+                            (= Rs. {Number(selectedAddStockVariant.unit_price).toFixed(4)}/{selectedAddStockVariant.metric})
+                          </span>
+                        </p>
+                      </div>
+                    )}
                   </div>
+
+                  {/* Number of units / bags */}
                   <div className="space-y-2">
-                    <Label>Quantity *</Label>
+                    <Label>
+                      {selectedAddStockVariant?.quantity_variant_name
+                        ? `Number of ${selectedAddStockVariant.quantity_variant_name}s *`
+                        : 'Quantity *'
+                      }
+                    </Label>
                     <Input
                       type="number" step="0.001" min="0"
-                      value={addStockForm.quantity}
-                      onChange={(e) => setAddStockForm({ ...addStockForm, quantity: e.target.value })}
-                      placeholder="e.g. 100"
+                      value={addStockForm.number_of_units}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, number_of_units: e.target.value })}
+                      placeholder={
+                        selectedAddStockVariant?.quantity_variant_name
+                          ? `e.g. 100 (bags/units)`
+                          : `e.g. 500 (${selectedAddStockVariant?.metric ?? 'units'})`
+                      }
                     />
+                    {/* Auto-computed total quantity */}
+                    {computedTotalQty !== null && selectedAddStockVariant?.quantity_per_unit && (
+                      <div className="bg-blue-50 border border-blue-200 rounded px-3 py-2 text-xs text-blue-800">
+                        <span className="font-semibold">
+                          {addStockForm.number_of_units} {selectedAddStockVariant.quantity_variant_name ?? 'units'}
+                        </span>
+                        {' × '}
+                        <span className="font-semibold">
+                          {selectedAddStockVariant.quantity_per_unit} {selectedAddStockVariant.metric}
+                        </span>
+                        {' = '}
+                        <span className="font-bold text-blue-900">
+                          {computedTotalQty.toFixed(3)} {selectedAddStockVariant.metric} total
+                        </span>
+                        {' — value ≈ Rs. '}
+                        <span className="font-bold">
+                          {(computedTotalQty * Number(selectedAddStockVariant.unit_price)).toFixed(2)}
+                        </span>
+                      </div>
+                    )}
+                    {computedTotalQty !== null && !selectedAddStockVariant?.quantity_per_unit && (
+                      <p className="text-xs text-slate-500">
+                        {addStockForm.number_of_units} {selectedAddStockVariant?.metric} will be added to store.
+                      </p>
+                    )}
                   </div>
+
+                  {/* Invoice */}
                   <div className="space-y-2">
                     <Label>Invoice Number</Label>
                     <Input
@@ -508,8 +895,10 @@ export default function PriceVariantsTab() {
                       placeholder="INV-2026-001"
                     />
                   </div>
+
+                  {/* Bill upload */}
                   <div className="space-y-2">
-                    <Label>Bill Upload (PDF/JPG/PNG)</Label>
+                    <Label>Bill Upload (PDF / JPG / PNG)</Label>
                     <Input
                       type="file"
                       accept=".pdf,.jpg,.jpeg,.png,image/*,application/pdf"
@@ -521,6 +910,8 @@ export default function PriceVariantsTab() {
                       </p>
                     )}
                   </div>
+
+                  {/* Notes */}
                   <div className="space-y-2">
                     <Label>Notes</Label>
                     <Textarea
@@ -540,10 +931,12 @@ export default function PriceVariantsTab() {
                 </DialogFooter>
               </DialogContent>
             </Dialog>
+
           </div>
         </div>
       </CardHeader>
 
+      {/* ── Table ── */}
       <CardContent className="p-0">
         {loading ? (
           <div className="p-6 text-slate-500 text-sm">Loading variants…</div>
@@ -551,7 +944,11 @@ export default function PriceVariantsTab() {
           <div className="p-10 text-center text-slate-500">
             <Package className="h-10 w-10 mx-auto mb-2 text-slate-300" />
             <p className="font-medium">No price variants yet.</p>
-            <p className="text-sm">Create a variant to start tracking stock at exact purchase prices.</p>
+            <p className="text-sm mt-1">
+              Create a price variant to start tracking stock.
+              Make sure you&apos;ve added quantity variants (packaging sizes) in the
+              <strong> Materials</strong> page first.
+            </p>
           </div>
         ) : (
           <div className="divide-y">
@@ -561,12 +958,12 @@ export default function PriceVariantsTab() {
                   <div>
                     <h3 className="font-semibold text-slate-900">{g.material_name}</h3>
                     <p className="text-xs text-slate-500">
-                      {g.variants.length} variant{g.variants.length === 1 ? '' : 's'}
+                      {g.variants.length} price variant{g.variants.length === 1 ? '' : 's'}
                       {' • '}
-                      Total stock: {g.total_qty.toFixed(3)}
+                      Total stock: {fmtNum(g.total_qty)} {g.metric}
                       {' • '}
-                      Stock value: <IndianRupee className="inline h-3 w-3" />
-                      {g.total_value.toFixed(2)}
+                      Value: <IndianRupee className="inline h-3 w-3" />
+                      {fmtNum(g.total_value, 2)}
                     </p>
                   </div>
                 </div>
@@ -574,13 +971,13 @@ export default function PriceVariantsTab() {
                 <Table>
                   <TableHeader>
                     <TableRow className="bg-slate-50">
-                      <TableHead className="w-6"></TableHead>
-                      <TableHead>Material</TableHead>
-                      <TableHead>Variant</TableHead>
+                      <TableHead className="w-6" />
+                      <TableHead>Packaging Variant</TableHead>
+                      <TableHead>Price Variant Label</TableHead>
                       <TableHead className="text-right">Unit Price</TableHead>
                       <TableHead className="text-right">Batches</TableHead>
-                      <TableHead className="text-right">Received</TableHead>
-                      <TableHead className="text-right">Available</TableHead>
+                      <TableHead className="text-right">Units Rcvd</TableHead>
+                      <TableHead className="text-right">Qty Available</TableHead>
                       <TableHead className="text-right">Value</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Action</TableHead>
@@ -604,31 +1001,80 @@ export default function PriceVariantsTab() {
                             }}
                           >
                             <TableCell>
-                              {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                              {open
+                                ? <ChevronDown className="h-4 w-4" />
+                                : <ChevronRight className="h-4 w-4" />}
                             </TableCell>
-                            <TableCell className="text-sm text-slate-700">
-                              {v.material_name}
-                              {v.metric && (
-                                <span className="text-slate-400 text-xs ml-1">({v.metric})</span>
+
+                            {/* Packaging variant */}
+                            <TableCell>
+                              {v.quantity_variant_name ? (
+                                <div className="flex items-center gap-1.5">
+                                  <Layers className="h-3.5 w-3.5 text-green-600 shrink-0" />
+                                  <div>
+                                    <div className="text-sm font-medium text-slate-800">
+                                      {v.quantity_variant_name}
+                                    </div>
+                                    <div className="text-xs text-slate-500">
+                                      {v.quantity_per_unit} {unit} each
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-slate-400 italic">— no packaging —</span>
                               )}
                             </TableCell>
-                            <TableCell className="font-medium">{v.variant_name}</TableCell>
-                            <TableCell className="text-right">
-                              Rs. {Number(v.unit_price).toFixed(2)}
+
+                            {/* Price variant label */}
+                            <TableCell className="font-medium text-slate-700 text-sm">
+                              {v.variant_name}
                             </TableCell>
+
+                            {/* Price — shown as price per packaging unit (primary) */}
+                            <TableCell className="text-right text-sm">
+                              {v.quantity_per_unit ? (
+                                <>
+                                  <div className="font-medium">
+                                    Rs. {(Number(v.unit_price) * v.quantity_per_unit).toFixed(2)}/
+                                    {v.quantity_variant_name ?? 'unit'}
+                                  </div>
+                                  <div className="text-xs text-slate-400">
+                                    = Rs. {Number(v.unit_price).toFixed(4)}/{unit}
+                                  </div>
+                                </>
+                              ) : (
+                                <div>Rs. {Number(v.unit_price).toFixed(2)}/{unit}</div>
+                              )}
+                            </TableCell>
+
                             <TableCell className="text-right">{v.batch_count}</TableCell>
-                            <TableCell className="text-right">{Number(v.quantity_received).toFixed(3)}</TableCell>
-                            <TableCell className="text-right font-semibold">
-                              {Number(v.quantity_available).toFixed(3)}
+
+                            {/* Units received */}
+                            <TableCell className="text-right text-sm">
+                              {v.quantity_variant_name
+                                ? `${fmtNum(v.total_units, 0)} units`
+                                : '—'}
                             </TableCell>
-                            <TableCell className="text-right">Rs. {Number(v.stock_value).toFixed(2)}</TableCell>
+
+                            {/* Qty available */}
+                            <TableCell className="text-right font-semibold text-sm">
+                              {fmtNum(v.quantity_available)} {unit}
+                            </TableCell>
+
+                            <TableCell className="text-right text-sm">
+                              Rs. {fmtNum(v.stock_value, 2)}
+                            </TableCell>
+
                             <TableCell>
                               {v.is_active ? (
-                                <Badge className="bg-green-100 text-green-700 hover:bg-green-100">Active</Badge>
+                                <Badge className="bg-green-100 text-green-700 hover:bg-green-100">
+                                  Active
+                                </Badge>
                               ) : (
                                 <Badge variant="outline" className="text-slate-500">Paused</Badge>
                               )}
                             </TableCell>
+
                             <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                               <Button
                                 size="sm"
@@ -636,20 +1082,20 @@ export default function PriceVariantsTab() {
                                 disabled={togglingId === v.variant_id}
                                 onClick={() => handleToggle(v.variant_id, !v.is_active)}
                               >
-                                {v.is_active ? (
-                                  <><Pause className="h-3 w-3 mr-1" /> Pause</>
-                                ) : (
-                                  <><Play className="h-3 w-3 mr-1" /> Resume</>
-                                )}
+                                {v.is_active
+                                  ? <><Pause className="h-3 w-3 mr-1" /> Pause</>
+                                  : <><Play  className="h-3 w-3 mr-1" /> Resume</>}
                               </Button>
                             </TableCell>
                           </TableRow>
+
+                          {/* Batch rows */}
                           {open && (
                             <TableRow key={`var-${v.variant_id}-batches`}>
                               <TableCell colSpan={10} className="p-0 bg-slate-50">
                                 <div className="p-4">
                                   <div className="text-xs font-semibold text-slate-600 mb-2">
-                                    FIFO batches under this variant (oldest → newest)
+                                    FIFO batches — oldest → newest (MR allocates oldest first; returns credit back via LIFO)
                                   </div>
                                   {variantBatches.length === 0 ? (
                                     <div className="text-sm text-slate-500 py-2">
@@ -660,7 +1106,8 @@ export default function PriceVariantsTab() {
                                       <TableHeader>
                                         <TableRow>
                                           <TableHead>Batch #</TableHead>
-                                          <TableHead>Batch Date</TableHead>
+                                          <TableHead>Date</TableHead>
+                                          <TableHead className="text-right">Units</TableHead>
                                           <TableHead className="text-right">Received</TableHead>
                                           <TableHead className="text-right">Available</TableHead>
                                           <TableHead className="text-right">Value</TableHead>
@@ -671,14 +1118,33 @@ export default function PriceVariantsTab() {
                                       <TableBody>
                                         {variantBatches.map((b) => (
                                           <TableRow key={b.batch_id}>
-                                            <TableCell className="font-mono text-xs">#{b.batch_id}</TableCell>
-                                            <TableCell>{new Date(b.batch_date).toLocaleDateString()}</TableCell>
-                                            <TableCell className="text-right">{Number(b.quantity_received).toFixed(3)} {unit}</TableCell>
-                                            <TableCell className="text-right font-semibold">{Number(b.quantity_available).toFixed(3)}</TableCell>
-                                            <TableCell className="text-right">Rs. {Number(b.stock_value).toFixed(2)}</TableCell>
-                                            <TableCell className="text-xs">{b.invoice_number || '—'}</TableCell>
+                                            <TableCell className="font-mono text-xs">
+                                              #{b.batch_id}
+                                            </TableCell>
                                             <TableCell className="text-xs">
-                                              {b.bill_path ? <span className="text-blue-600 underline">file</span> : '—'}
+                                              {new Date(b.batch_date).toLocaleDateString()}
+                                            </TableCell>
+                                            <TableCell className="text-right text-xs">
+                                              {b.number_of_units != null
+                                                ? `${fmtNum(b.number_of_units, 0)} ${b.quantity_variant_name ?? 'units'}`
+                                                : '—'}
+                                            </TableCell>
+                                            <TableCell className="text-right text-xs">
+                                              {fmtNum(b.quantity_received)} {unit}
+                                            </TableCell>
+                                            <TableCell className="text-right text-xs font-semibold">
+                                              {fmtNum(b.quantity_available)} {unit}
+                                            </TableCell>
+                                            <TableCell className="text-right text-xs">
+                                              Rs. {fmtNum(b.stock_value, 2)}
+                                            </TableCell>
+                                            <TableCell className="text-xs">
+                                              {b.invoice_number || '—'}
+                                            </TableCell>
+                                            <TableCell className="text-xs">
+                                              {b.bill_path
+                                                ? <span className="text-blue-600 underline">file</span>
+                                                : '—'}
                                             </TableCell>
                                           </TableRow>
                                         ))}

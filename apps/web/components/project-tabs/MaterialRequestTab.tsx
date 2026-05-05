@@ -9,15 +9,23 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/lib/supabase';
-import { Plus, Package, TrendingDown, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Plus, Package, Clock, CheckCircle, XCircle, AlertCircle, Layers } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Material {
   material_id: number;
   material_name: string;
   metric: string;
+}
+
+interface StoreVariantStock {
+  variant_id: number;
+  variant_name: string;
+  quantity_variant_name: string | null;
+  quantity_per_unit: number | null;
+  unit_price: number;
+  quantity_available: number;
 }
 
 interface MaterialRequest {
@@ -37,31 +45,17 @@ interface MaterialRequest {
   metric?: string;
 }
 
-interface MaterialReturn {
-  return_id: number;
-  return_number: string;
-  material_id: number;
-  variant_id: number | null;
-  returned_quantity: number;
-  number_of_units: number | null;
-  condition: string;
-  reason: string | null;
-  status: string;
-  created_at: string;
-  review_notes: string | null;
-  material_name?: string;
-}
-
 export default function MaterialRequestTab({ projectId }: { projectId: string }) {
-  
+
   const [materials, setMaterials] = useState<Material[]>([]);
   const [requests, setRequests] = useState<MaterialRequest[]>([]);
-  const [returns, setReturns] = useState<MaterialReturn[]>([]);
   const [loading, setLoading] = useState(true);
-  
+
   const [isRequestDialogOpen, setIsRequestDialogOpen] = useState(false);
-  const [isReturnDialogOpen, setIsReturnDialogOpen] = useState(false);
-  
+
+  const [storeVariantStock, setStoreVariantStock] = useState<StoreVariantStock[]>([]);
+  const [storeStockLoading, setStoreStockLoading] = useState(false);
+
   const [requestForm, setRequestForm] = useState({
     material_id: null as number | null,
     requested_quantity: '',
@@ -69,13 +63,6 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
     priority: 'Normal',
     required_by: '',
     purpose: ''
-  });
-  
-  const [returnForm, setReturnForm] = useState({
-    material_id: null as number | null,
-    returned_quantity: '',
-    condition: 'Good',
-    reason: ''
   });
 
   useEffect(() => {
@@ -85,8 +72,7 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
   const fetchAll = async () => {
     await Promise.all([
       fetchMaterials(),
-      fetchRequests(),
-      fetchReturns()
+      fetchRequests()
     ]);
     setLoading(false);
   };
@@ -98,6 +84,19 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
       .eq('is_active', true)
       .order('material_name');
     setMaterials(data || []);
+  };
+
+  const fetchStoreStock = async (materialId: number) => {
+    setStoreVariantStock([]);
+    setStoreStockLoading(true);
+    const { data } = await supabase
+      .from('active_price_variants_dropdown')
+      .select('variant_id, variant_name, quantity_variant_name, quantity_per_unit, unit_price, quantity_available')
+      .eq('material_id', materialId)
+      .gt('quantity_available', 0)
+      .order('variant_id', { ascending: true });
+    setStoreVariantStock((data as StoreVariantStock[]) || []);
+    setStoreStockLoading(false);
   };
 
   const fetchRequests = async () => {
@@ -118,33 +117,10 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
     const requestsWithDetails = (data || []).map((req: any) => ({
       ...req,
       material_name: req.materials_master?.material_name,
-      metric: req.materials_master?.metric
+      metric: req.materials_master?.metric,
     }));
     
     setRequests(requestsWithDetails);
-  };
-
-  const fetchReturns = async () => {
-    const { data, error } = await supabase
-      .from('material_returns')
-      .select(`
-        *,
-        materials_master!inner(material_name)
-      `)
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false });
-    
-    if (error) {
-      toast.error('Failed to load returns: ' + error.message);
-      return;
-    }
-    
-    const returnsWithDetails = (data || []).map((ret: any) => ({
-      ...ret,
-      material_name: ret.materials_master?.material_name
-    }));
-    
-    setReturns(returnsWithDetails);
   };
 
   const handleSubmitRequest = async () => {
@@ -206,40 +182,6 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
     }
   };
 
-  const handleSubmitReturn = async () => {
-    try {
-      if (!returnForm.material_id) {
-        toast.error('Please select a material');
-        return;
-      }
-      if (!returnForm.returned_quantity || parseFloat(returnForm.returned_quantity) <= 0) {
-        toast.error('Please enter a valid quantity');
-        return;
-      }
-
-      const qty = parseFloat(returnForm.returned_quantity);
-
-      // Use the validating RPC — checks returnable quantity and logs 'Return Submitted'.
-      const { data, error } = await supabase.rpc('submit_material_return_request', {
-        p_project_id:  Number(projectId),
-        p_material_id: Number(returnForm.material_id),
-        p_quantity:    qty,
-        p_condition:   returnForm.condition,
-        p_reason:      returnForm.reason.trim() || null,
-      });
-
-      if (error) throw error;
-
-      const result = Array.isArray(data) ? data[0] : data;
-      toast.success(`Return request ${result?.return_number || 'submitted'} — awaiting store approval`);
-      setIsReturnDialogOpen(false);
-      resetReturnForm();
-      fetchReturns();
-    } catch (error: any) {
-      toast.error('Failed to submit return: ' + error.message);
-    }
-  };
-
   const handleCancelRequest = async (requestId: number) => {
     if (!confirm('Are you sure you want to cancel this request?')) return;
 
@@ -292,25 +234,12 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
       required_by: '',
       purpose: ''
     });
-  };
-
-  const resetReturnForm = () => {
-    setReturnForm({
-      material_id: null,
-      returned_quantity: '',
-      condition: 'Good',
-      reason: ''
-    });
+    setStoreVariantStock([]);
   };
 
   const openNewRequest = () => {
     resetRequestForm();
     setIsRequestDialogOpen(true);
-  };
-
-  const openNewReturn = () => {
-    resetReturnForm();
-    setIsReturnDialogOpen(true);
   };
 
   const getStatusIcon = (status: string) => {
@@ -347,14 +276,7 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="requests" className="space-y-4">
-        <TabsList className="bg-white border">
-          <TabsTrigger value="requests">Material Requests</TabsTrigger>
-          <TabsTrigger value="returns">Material Returns</TabsTrigger>
-        </TabsList>
-
-        {/* Material Requests Tab */}
-        <TabsContent value="requests" className="space-y-4">
+      <div className="space-y-4">
           <Card className="bg-white shadow-sm">
             <CardHeader className="border-b bg-slate-50">
               <div className="flex items-center justify-between">
@@ -370,14 +292,20 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
                   </DialogTrigger>
                   <DialogContent className="bg-white max-w-lg">
                     <DialogHeader>
-                      <DialogTitle>New Material Request</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
+                    <DialogTitle>New Material Request</DialogTitle>
+                  </DialogHeader>
+                  <div className="space-y-4 py-4 overflow-y-auto max-h-[70vh] pr-1">
+
+                      {/* 1 — Material */}
                       <div className="space-y-2">
                         <Label>Material *</Label>
                         <Select
                           value={requestForm.material_id?.toString()}
-                          onValueChange={(v) => setRequestForm({ ...requestForm, material_id: parseInt(v) })}
+                          onValueChange={(v) => {
+                            const id = parseInt(v);
+                            setRequestForm({ ...requestForm, material_id: id });
+                            if (requestForm.request_source === 'Store') fetchStoreStock(id);
+                          }}
                         >
                           <SelectTrigger className="bg-white">
                             <SelectValue placeholder="Select material" />
@@ -392,6 +320,106 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
                         </Select>
                       </div>
 
+                      {/* 2 — Request Source (before stock panel so it drives what panel shows) */}
+                      <div className="space-y-2">
+                        <Label>Request Source *</Label>
+                        <Select
+                          value={requestForm.request_source}
+                          onValueChange={(v) => {
+                            setRequestForm({ ...requestForm, request_source: v });
+                            if (v === 'Store' && requestForm.material_id) {
+                              fetchStoreStock(requestForm.material_id);
+                            } else {
+                              setStoreVariantStock([]);
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="bg-white">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-white">
+                            <SelectItem value="Store">Store (From Inventory)</SelectItem>
+                            <SelectItem value="Local Procurement">Local Procurement (Buy from Market)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {/* 3 — Store stock availability by variant (only shown when source = Store) */}
+                      {requestForm.material_id && requestForm.request_source === 'Store' && (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <Layers className="h-3.5 w-3.5 text-blue-500" />
+                            <span className="text-xs font-semibold text-slate-600">
+                              Available in Store
+                            </span>
+                          </div>
+                          {storeStockLoading ? (
+                            <p className="text-xs text-slate-400 pl-1">Loading…</p>
+                          ) : storeVariantStock.length === 0 ? (
+                            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                              ⚠ No stock available for this material in the store.
+                            </div>
+                          ) : (
+                            <div className="rounded border text-xs overflow-hidden">
+                              <div className="bg-slate-100 grid grid-cols-[1fr_auto_auto] gap-x-3 px-3 py-1.5 font-semibold text-slate-600">
+                                <span>Packaging Variant</span>
+                                <span className="text-right">Price / unit</span>
+                                <span className="text-right">Available</span>
+                              </div>
+                              <div className="divide-y max-h-32 overflow-y-auto">
+                                {storeVariantStock.map((sv) => {
+                                  const metric = materials.find(m => m.material_id === requestForm.material_id)?.metric || '';
+                                  const pricePerPkg = sv.quantity_per_unit
+                                    ? Number(sv.unit_price) * Number(sv.quantity_per_unit)
+                                    : null;
+                                  const unitsAvail = sv.quantity_per_unit && sv.quantity_per_unit > 0
+                                    ? `${(Number(sv.quantity_available) / sv.quantity_per_unit).toFixed(1)} units`
+                                    : null;
+                                  return (
+                                    <div key={sv.variant_id} className="grid grid-cols-[1fr_auto_auto] gap-x-3 px-3 py-1.5 items-start">
+                                      <div>
+                                        <div className="font-medium text-slate-700">
+                                          {sv.quantity_variant_name ?? sv.variant_name}
+                                        </div>
+                                        {sv.quantity_per_unit && (
+                                          <div className="text-slate-400">
+                                            {sv.quantity_per_unit} {metric}/unit
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="text-right text-slate-600 pt-0.5">
+                                        {pricePerPkg !== null ? (
+                                          <>
+                                            <div>Rs.{pricePerPkg.toFixed(2)}/{sv.quantity_variant_name ?? 'unit'}</div>
+                                            <div className="text-slate-400">= Rs.{Number(sv.unit_price).toFixed(4)}/{metric}</div>
+                                          </>
+                                        ) : (
+                                          <div>Rs.{Number(sv.unit_price).toFixed(2)}/{metric || 'unit'}</div>
+                                        )}
+                                      </div>
+                                      <div className="text-right pt-0.5">
+                                        <div className="font-semibold text-slate-800">
+                                          {Number(sv.quantity_available).toFixed(3)} {metric}
+                                        </div>
+                                        {unitsAvail && <div className="text-slate-400">{unitsAvail}</div>}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div className="bg-slate-50 grid grid-cols-[1fr_auto] gap-x-3 px-3 py-1.5 font-semibold border-t">
+                                <span>Total Available</span>
+                                <span className="text-right">
+                                  {storeVariantStock.reduce((s, sv) => s + Number(sv.quantity_available), 0).toFixed(3)}{' '}
+                                  {materials.find(m => m.material_id === requestForm.material_id)?.metric || ''}
+                                </span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 4 — Quantity */}
                       <div className="space-y-2">
                         <Label>Quantity *</Label>
                         <Input
@@ -407,19 +435,6 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
                             Unit: {materials.find(m => m.material_id === requestForm.material_id)?.metric}
                           </p>
                         )}
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Request Source *</Label>
-                        <Select value={requestForm.request_source} onValueChange={(v) => setRequestForm({ ...requestForm, request_source: v })}>
-                          <SelectTrigger className="bg-white">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-white">
-                            <SelectItem value="Store">Store (From Inventory)</SelectItem>
-                            <SelectItem value="Local Procurement">Local Procurement (Buy from Market)</SelectItem>
-                          </SelectContent>
-                        </Select>
                       </div>
 
                       <div className="space-y-2">
@@ -549,165 +564,7 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
-
-        {/* Material Returns Tab */}
-        <TabsContent value="returns" className="space-y-4">
-          <Card className="bg-white shadow-sm">
-            <CardHeader className="border-b bg-slate-50">
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
-                  <TrendingDown className="h-5 w-5 text-green-600" />
-                  Material Returns
-                </CardTitle>
-                <Dialog open={isReturnDialogOpen} onOpenChange={setIsReturnDialogOpen}>
-                  <DialogTrigger asChild>
-                    <Button onClick={openNewReturn} className="bg-green-600 hover:bg-green-700">
-                      <Plus className="h-4 w-4 mr-2" /> New Return
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="bg-white max-w-lg">
-                    <DialogHeader>
-                      <DialogTitle>Return Material to Store</DialogTitle>
-                    </DialogHeader>
-                    <div className="space-y-4 py-4">
-                      <div className="space-y-2">
-                        <Label>Material *</Label>
-                        <Select
-                          value={returnForm.material_id?.toString()}
-                          onValueChange={(v) => setReturnForm({ ...returnForm, material_id: parseInt(v) })}
-                        >
-                          <SelectTrigger className="bg-white">
-                            <SelectValue placeholder="Select material" />
-                          </SelectTrigger>
-                          <SelectContent className="bg-white">
-                            {materials.map((m) => (
-                              <SelectItem key={m.material_id} value={m.material_id.toString()}>
-                                {m.material_name} ({m.metric})
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Quantity *</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={returnForm.returned_quantity}
-                          onChange={(e) => setReturnForm({ ...returnForm, returned_quantity: e.target.value })}
-                          placeholder="Enter quantity"
-                          className="bg-white"
-                        />
-                        {returnForm.material_id && (
-                          <p className="text-xs text-slate-500">
-                            Unit: {materials.find(m => m.material_id === returnForm.material_id)?.metric}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Condition *</Label>
-                        <Select value={returnForm.condition} onValueChange={(v) => setReturnForm({ ...returnForm, condition: v })}>
-                          <SelectTrigger className="bg-white">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-white">
-                            <SelectItem value="Excellent">Excellent</SelectItem>
-                            <SelectItem value="Good">Good</SelectItem>
-                            <SelectItem value="Fair">Fair</SelectItem>
-                            <SelectItem value="Damaged">Damaged</SelectItem>
-                            <SelectItem value="Unusable">Unusable</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>Reason for Return</Label>
-                        <Textarea
-                          value={returnForm.reason}
-                          onChange={(e) => setReturnForm({ ...returnForm, reason: e.target.value })}
-                          placeholder="Why is this material being returned?"
-                          className="bg-white"
-                          rows={3}
-                        />
-                      </div>
-
-                      <div className="flex gap-2 pt-4">
-                        <Button onClick={handleSubmitReturn} className="flex-1 bg-green-600 hover:bg-green-700">
-                          Submit Return
-                        </Button>
-                        <Button
-                          onClick={() => setIsReturnDialogOpen(false)}
-                          variant="outline"
-                          className="flex-1"
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="divide-y">
-                {returns.length === 0 ? (
-                  <div className="p-8 text-center text-slate-500">
-                    No material returns yet.
-                  </div>
-                ) : (
-                  returns.map((ret) => (
-                    <div key={ret.return_id} className="p-4 hover:bg-slate-50">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Badge variant="outline" className="font-mono">{ret.return_number}</Badge>
-                            <Badge className={getStatusColor(ret.status)}>
-                              {getStatusIcon(ret.status)}
-                              <span className="ml-1">{ret.status}</span>
-                            </Badge>
-                            <Badge className={
-                              ret.condition === 'Excellent' || ret.condition === 'Good' ? 'bg-green-100 text-green-700' :
-                              ret.condition === 'Fair' ? 'bg-yellow-100 text-yellow-700' :
-                              'bg-red-100 text-red-700'
-                            }>
-                              {ret.condition}
-                            </Badge>
-                          </div>
-                          
-                          <div className="space-y-1">
-                            <p className="text-sm">
-                              <span className="font-semibold text-slate-900">Material:</span> {ret.material_name}
-                            </p>
-                            <p className="text-sm">
-                              <span className="font-semibold text-slate-900">Quantity:</span> {ret.returned_quantity}
-                              {ret.number_of_units && <span className="ml-2">({ret.number_of_units} units)</span>}
-                            </p>
-                            {ret.reason && (
-                              <p className="text-sm text-slate-600">Reason: {ret.reason}</p>
-                            )}
-                            {ret.review_notes && (
-                              <p className="text-sm text-slate-600 bg-slate-50 p-2 rounded mt-2">
-                                <span className="font-semibold">Review:</span> {ret.review_notes}
-                              </p>
-                            )}
-                          </div>
-                          
-                          <p className="text-xs text-slate-500 mt-2">
-                            Returned on {new Date(ret.created_at).toLocaleString()}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
+      </div>
     </div>
   );
 }

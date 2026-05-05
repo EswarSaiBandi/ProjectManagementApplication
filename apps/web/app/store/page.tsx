@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { supabase } from '@/lib/supabase';
-import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X } from 'lucide-react';
+import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X, Layers } from 'lucide-react';
 import { toast } from 'sonner';
 import PriceVariantsTab from '@/components/store/PriceVariantsTab';
 import StoreInventoryAggregateTab from '@/components/store/StoreInventoryAggregateTab';
@@ -27,21 +27,6 @@ interface Variant {
   material_id: number;
   variant_name: string;
   quantity_per_unit: number;
-}
-
-interface StoreInventory {
-  inventory_id: number;
-  material_id: number;
-  variant_id: number;
-  number_of_units: number;
-  total_quantity: number;
-  location: string | null;
-  notes: string | null;
-  last_updated: string;
-  material_name?: string;
-  variant_name?: string;
-  quantity_per_unit?: number;
-  metric?: string;
 }
 
 interface MaterialRequest {
@@ -78,6 +63,18 @@ interface MaterialReturn {
   variant_name?: string;
 }
 
+interface StockBatchPreview {
+  batch_id: number;
+  variant_id: number;
+  quantity_variant_id: number | null;
+  variant_name: string;
+  quantity_variant_name: string | null;
+  unit_price: number;
+  quantity_per_unit: number | null;
+  batch_date: string;
+  quantity_available: number;
+}
+
 interface StockEntryLog {
   log_id: number;
   material_id: number;
@@ -102,38 +99,14 @@ function safeFileName(name: string) {
 
 export default function StorePage() {
   const [materials, setMaterials] = useState<Material[]>([]);
-  const [variants, setVariants] = useState<Variant[]>([]);
-  const [inventory, setInventory] = useState<StoreInventory[]>([]);
   const [pendingRequests, setPendingRequests] = useState<MaterialRequest[]>([]);
   const [pendingReturns, setPendingReturns] = useState<MaterialReturn[]>([]);
   const [stockEntryLogs, setStockEntryLogs] = useState<StockEntryLog[]>([]);
   const [loading, setLoading] = useState(true);
-  
-  const [isInventoryDialogOpen, setIsInventoryDialogOpen] = useState(false);
+
   const [isFulfillDialogOpen, setIsFulfillDialogOpen] = useState(false);
   const [isReturnDialogOpen, setIsReturnDialogOpen] = useState(false);
-  
-  const [inventoryForm, setInventoryForm] = useState({
-    inventory_id: null as number | null,
-    material_id: null as number | null,
-    variant_id: null as number | null,
-    number_of_units: '',
-    location: '',
-    notes: '',
-    purchase_order_date: '',
-    invoice_number: '',
-    amount_per_unit: '',
-    gst: ''
-  });
-  const [stockBillFile, setStockBillFile] = useState<File | null>(null);
-  const [reductionForm, setReductionForm] = useState({
-    material_id: null as number | null,
-    variant_id: null as number | null,
-    number_of_units: '',
-    remarks: ''
-  });
-  const [isReducingStock, setIsReducingStock] = useState(false);
-  
+
   const [selectedRequest, setSelectedRequest] = useState<MaterialRequest | null>(null);
   const [fulfillmentUnits, setFulfillmentUnits] = useState<Array<{ variant_id: number; units: number }>>([]);
   const [fulfillQty, setFulfillQty] = useState('');
@@ -144,16 +117,20 @@ export default function StorePage() {
   const [selectedStockLog, setSelectedStockLog] = useState<StockEntryLog | null>(null);
   const [isStockLogDialogOpen, setIsStockLogDialogOpen] = useState(false);
 
+  const [stockPreview, setStockPreview] = useState<StockBatchPreview[]>([]);
+  const [stockPreviewLoading, setStockPreviewLoading] = useState(false);
+  // variantUnits[price_variant_id] = number of physical packaging units (string for input)
+  const [variantUnits, setVariantUnits] = useState<Record<number, string>>({});
+
   useEffect(() => {
     fetchAll();
   }, []);
 
-  // Refresh Stock Entry Logs + inventory whenever PriceVariantsTab mutates store stock
+  // Refresh Stock Entry Logs whenever PriceVariantsTab mutates store stock
   // (add stock, damage/write-off, pause/resume variant).
   useEffect(() => {
     const handler = () => {
       fetchStockEntryLogs();
-      fetchInventory();
     };
     window.addEventListener('store-stock-updated', handler);
     return () => window.removeEventListener('store-stock-updated', handler);
@@ -162,8 +139,6 @@ export default function StorePage() {
   const fetchAll = async () => {
     await Promise.all([
       fetchMaterials(),
-      fetchVariants(),
-      fetchInventory(),
       fetchPendingRequests(),
       fetchPendingReturns(),
       fetchStockEntryLogs()
@@ -178,42 +153,6 @@ export default function StorePage() {
       .eq('is_active', true)
       .order('material_name');
     setMaterials(data || []);
-  };
-
-  const fetchVariants = async () => {
-    const { data } = await supabase
-      .from('material_variants')
-      .select('*')
-      .eq('is_active', true)
-      .order('material_id')
-      .order('quantity_per_unit', { ascending: false });
-    setVariants(data || []);
-  };
-
-  const fetchInventory = async () => {
-    const { data, error } = await supabase
-      .from('store_inventory')
-      .select(`
-        *,
-        materials_master!inner(material_name, metric),
-        material_variants!inner(variant_name, quantity_per_unit)
-      `)
-      .order('material_id');
-    
-    if (error) {
-      toast.error('Failed to load inventory: ' + error.message);
-      return;
-    }
-    
-    const inventoryWithDetails = (data || []).map((item: any) => ({
-      ...item,
-      material_name: item.materials_master?.material_name,
-      metric: item.materials_master?.metric,
-      variant_name: item.material_variants?.variant_name,
-      quantity_per_unit: item.material_variants?.quantity_per_unit
-    }));
-    
-    setInventory(inventoryWithDetails);
   };
 
   const fetchPendingRequests = async () => {
@@ -236,7 +175,7 @@ export default function StorePage() {
       ...req,
       project_name: req.projects?.project_name,
       material_name: req.materials_master?.material_name,
-      metric: req.materials_master?.metric
+      metric: req.materials_master?.metric,
     }));
     
     setPendingRequests(requestsWithDetails);
@@ -249,7 +188,7 @@ export default function StorePage() {
         *,
         projects!inner(project_name),
         materials_master!inner(material_name),
-        material_variants(variant_name)
+        material_variants!quantity_variant_id(variant_name)
       `)
       .eq('status', 'Pending')
       .order('created_at', { ascending: false });
@@ -309,31 +248,6 @@ export default function StorePage() {
     }));
 
     setStockEntryLogs(logsWithDetails);
-  };
-
-  const buildStockEntryNotes = (billMeta?: { billPath: string; billFileName: string; billBucket: string } | null) => {
-    const meta = {
-      poDate: inventoryForm.purchase_order_date || '',
-      invoiceNumber: inventoryForm.invoice_number.trim(),
-      amountPerUnit: inventoryForm.amount_per_unit.trim(),
-      gst: inventoryForm.gst.trim(),
-      remarks: inventoryForm.notes.trim(),
-      billPath: billMeta?.billPath || '',
-      billFileName: billMeta?.billFileName || '',
-      billBucket: billMeta?.billBucket || ''
-    };
-
-    const hasDetails = Object.values(meta).some((value) => value.length > 0);
-    if (!hasDetails) return null;
-
-    const lines: string[] = [];
-    if (meta.poDate) lines.push(`[PO_DATE] ${meta.poDate}`);
-    if (meta.invoiceNumber) lines.push(`[INVOICE_NUMBER] ${meta.invoiceNumber}`);
-    if (meta.amountPerUnit) lines.push(`[AMOUNT_PER_UNIT] ${meta.amountPerUnit}`);
-    if (meta.gst) lines.push(`[GST] ${meta.gst}`);
-    if (meta.remarks) lines.push(`[REMARKS] ${meta.remarks}`);
-
-    return `${STOCK_META_PREFIX}${JSON.stringify(meta)}\n${lines.join('\n')}`;
   };
 
   const parseStockEntryNotes = (notes: string | null) => {
@@ -407,167 +321,93 @@ export default function StorePage() {
     };
   };
 
-  const handleSaveInventory = async () => {
-    try {
-      if (!inventoryForm.material_id || !inventoryForm.variant_id) {
-        toast.error('Please select material and variant');
-        return;
-      }
-      if (!inventoryForm.number_of_units || parseFloat(inventoryForm.number_of_units) <= 0) {
-        toast.error('Please enter valid number of units');
-        return;
-      }
-      if (!stockBillFile) {
-        toast.error('Bill upload is mandatory while adding stock');
-        return;
-      }
-
-      const variant = variants.find(v => v.variant_id === inventoryForm.variant_id);
-      const units = parseFloat(inventoryForm.number_of_units);
-      const totalQuantity = variant ? units * variant.quantity_per_unit : 0;
-      const billBucket = 'documents';
-      const billPath = `store/stock-bills/${Date.now()}-${safeFileName(stockBillFile.name)}`;
-      const { error: billUploadError } = await supabase.storage
-        .from(billBucket)
-        .upload(billPath, stockBillFile, {
-          contentType: stockBillFile.type || undefined,
-          upsert: false
-        });
-      if (billUploadError) throw billUploadError;
-
-      const stockNotes = buildStockEntryNotes({
-        billPath,
-        billFileName: stockBillFile.name,
-        billBucket
-      });
-
-      const payload = {
-        material_id: inventoryForm.material_id,
-        variant_id: inventoryForm.variant_id,
-        number_of_units: units,
-        total_quantity: totalQuantity,
-        location: inventoryForm.location.trim() || null,
-        notes: stockNotes,
-        last_updated: new Date().toISOString()
-      };
-
-      if (inventoryForm.inventory_id) {
-        const { error } = await supabase
-          .from('store_inventory')
-          .update(payload)
-          .eq('inventory_id', inventoryForm.inventory_id);
-        
-        if (error) throw error;
-        toast.success('Inventory updated successfully');
-      } else {
-        const existingInventory = inventory.find(
-          (inv) =>
-            inv.material_id === inventoryForm.material_id &&
-            inv.variant_id === inventoryForm.variant_id
-        );
-
-        if (existingInventory) {
-          const { error } = await supabase
-            .from('store_inventory')
-            .update({
-              number_of_units: existingInventory.number_of_units + units,
-              total_quantity: existingInventory.total_quantity + totalQuantity,
-              location: inventoryForm.location.trim() || existingInventory.location || null,
-              notes: stockNotes || existingInventory.notes || null,
-              last_updated: new Date().toISOString()
-            })
-            .eq('inventory_id', existingInventory.inventory_id);
-
-          if (error) throw error;
-        } else {
-          const { error } = await supabase
-            .from('store_inventory')
-            .insert([payload]);
-
-          if (error) throw error;
-        }
-
-        toast.success('Inventory added successfully');
-      }
-
-      const existingInventoryForLog = inventory.find(
-        (inv) =>
-          inv.material_id === inventoryForm.material_id &&
-          inv.variant_id === inventoryForm.variant_id
-      );
-
-      const { error: movementLogError } = await supabase
-        .from('material_movement_logs')
-        .insert({
-          material_id: inventoryForm.material_id,
-          variant_id: inventoryForm.variant_id,
-          movement_type: 'Store In',
-          quantity: totalQuantity,
-          number_of_units: units,
-          reference_type: inventoryForm.inventory_id || existingInventoryForLog ? 'Manual Adjustment' : 'Initial Stock',
-          reference_id: inventoryForm.inventory_id,
-          notes: stockNotes || (inventoryForm.inventory_id ? 'Inventory manually adjusted in store page' : 'Stock added from store page'),
-          movement_date: new Date().toISOString()
-        });
-
-      if (movementLogError) {
-        toast.error('Inventory saved, but failed to create stock entry log: ' + movementLogError.message);
-      }
-
-      setIsInventoryDialogOpen(false);
-      resetInventoryForm();
-      fetchInventory();
-      fetchStockEntryLogs();
-    } catch (error: any) {
-      toast.error('Failed to save inventory: ' + error.message);
-    }
-  };
-
-  const openFulfillDialog = (request: MaterialRequest) => {
+  const openFulfillDialog = async (request: MaterialRequest) => {
     setSelectedRequest(request);
     setApprovalNotes('');
     setFulfillQty(String(request.requested_quantity));
-    setFulfillmentUnits([]); // legacy, unused by new flow
+    setFulfillmentUnits([]);
+    setVariantUnits({});
     setIsFulfillDialogOpen(true);
+
+    // Fetch available batches for this material (FIFO order)
+    setStockPreview([]);
+    setStockPreviewLoading(true);
+    const { data } = await supabase
+      .from('material_stock_batches_admin')
+      .select('batch_id, variant_id, quantity_variant_id, variant_name, quantity_variant_name, unit_price, quantity_per_unit, batch_date, quantity_available')
+      .eq('material_id', request.material_id)
+      .gt('quantity_available', 0)
+      .order('batch_date', { ascending: true })
+      .order('batch_id', { ascending: true });
+    setStockPreview((data as StockBatchPreview[]) || []);
+    setStockPreviewLoading(false);
   };
 
   const handleApproveRequest = async () => {
     if (!selectedRequest) return;
 
-    const qty = parseFloat(fulfillQty);
-    if (!qty || qty <= 0) {
-      toast.error('Fulfill quantity must be > 0');
-      return;
+    // Build per-packaging-variant allocations.
+    // variantUnits keys are quantity_variant_id (packaging type); FIFO picks price batches.
+    const uniqueQtyVariantMap = new Map<number, { quantity_per_unit: number | null }>();
+    stockPreview.forEach(b => {
+      if (b.quantity_variant_id && !uniqueQtyVariantMap.has(b.quantity_variant_id)) {
+        uniqueQtyVariantMap.set(b.quantity_variant_id, { quantity_per_unit: b.quantity_per_unit });
+      }
+    });
+
+    const allocations = Object.entries(variantUnits)
+      .map(([qvidStr, unitsStr]) => {
+        const qvid = parseInt(qvidStr);
+        const n    = parseFloat(unitsStr);
+        const qpu  = uniqueQtyVariantMap.get(qvid)?.quantity_per_unit ?? 1;
+        return { qty_variant_id: qvid, qty: isNaN(n) || n <= 0 ? 0 : n * qpu };
+      })
+      .filter(a => a.qty > 0);
+
+    // Total base-metric qty for the fulfilled_quantity field
+    let qty: number;
+    if (allocations.length > 0) {
+      qty = allocations.reduce((s, a) => s + a.qty, 0);
+    } else {
+      qty = parseFloat(fulfillQty);
+      if (!qty || qty <= 0) {
+        toast.error('Enter units above per variant, or set a quantity for auto-FIFO');
+        return;
+      }
     }
 
     try {
-      // 1. Mark the request approved with the approved quantity.
-      const { error: reqError } = await supabase
-        .from('material_requests')
-        .update({
-          status: 'Approved',
-          approved_at: new Date().toISOString(),
-          approval_notes: approvalNotes.trim() || null,
-          fulfilled_quantity: qty,
-        })
-        .eq('request_id', selectedRequest.request_id);
-      if (reqError) throw reqError;
-
-      // 2. FIFO-allocate from store to project.
-      const { data: rpcData, error: rpcErr } = await supabase.rpc('allocate_material_fifo', {
-        p_material_id: Number(selectedRequest.material_id),
-        p_project_id:  Number(selectedRequest.project_id),
-        p_required_qty: qty,
-      });
+      // 1. FIFO-allocate FIRST — validates stock + deducts batches atomically.
+      //    Multi-packaging: one transaction, FIFO across all price batches per packaging type.
+      //    Auto-FIFO: across ALL variants, oldest batch first.
+      let rpcData: any, rpcErr: any;
+      if (allocations.length > 0) {
+        ({ data: rpcData, error: rpcErr } = await supabase.rpc(
+          'allocate_material_fifo_multi_qty_variant',
+          {
+            p_allocations: allocations,
+            p_project_id:  Number(selectedRequest.project_id),
+          }
+        ));
+      } else {
+        ({ data: rpcData, error: rpcErr } = await supabase.rpc(
+          'allocate_material_fifo',
+          {
+            p_material_id:  Number(selectedRequest.material_id),
+            p_project_id:   Number(selectedRequest.project_id),
+            p_required_qty: qty,
+          }
+        ));
+      }
       if (rpcErr) throw rpcErr;
 
-      const result = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+      const result      = Array.isArray(rpcData) ? rpcData[0] : rpcData;
       const allocationId = result?.allocation_id;
       const totalCost    = Number(result?.total_cost || 0);
 
-      // 3. Stamp allocation metadata to link back to the request.
+      // 2. Stamp allocation metadata to link back to the request.
       if (allocationId) {
-        const noteParts: string[] = [`Fulfills request ${selectedRequest.request_number}`];
+        const noteParts: string[] = [`Fulfills MR ${selectedRequest.request_number}`];
         if (approvalNotes.trim()) noteParts.push(approvalNotes.trim());
         noteParts.push(`FIFO cost=Rs.${totalCost.toFixed(2)}`);
         await supabase
@@ -580,17 +420,24 @@ export default function StorePage() {
           .eq('allocation_id', allocationId);
       }
 
-      // 4. Mark the request Fulfilled.
-      await supabase
+      // 3. Mark the request Fulfilled — only reached when FIFO succeeded.
+      const { error: reqError } = await supabase
         .from('material_requests')
-        .update({ status: 'Fulfilled', fulfilled_at: new Date().toISOString() })
+        .update({
+          status: 'Fulfilled',
+          approved_at: new Date().toISOString(),
+          fulfilled_at: new Date().toISOString(),
+          approval_notes: approvalNotes.trim() || null,
+          fulfilled_quantity: qty,
+        })
         .eq('request_id', selectedRequest.request_id);
+      if (reqError) throw reqError;
 
-      toast.success(`Request fulfilled — FIFO cost Rs. ${totalCost.toFixed(2)}`);
+      toast.success(`Request fulfilled — FIFO allocated Rs. ${totalCost.toFixed(2)}`);
       setIsFulfillDialogOpen(false);
       fetchAll();
     } catch (error: any) {
-      toast.error('Failed to approve request: ' + error.message);
+      toast.error('Failed to fulfill request: ' + error.message);
     }
   };
 
@@ -674,164 +521,6 @@ export default function StorePage() {
     fetchPendingReturns();
   };
 
-  const resetReductionForm = () => {
-    setReductionForm({
-      material_id: null,
-      variant_id: null,
-      number_of_units: '',
-      remarks: ''
-    });
-  };
-
-  const handleReduceStock = async () => {
-    try {
-      if (!reductionForm.material_id || !reductionForm.variant_id) {
-        toast.error('Please select material and variant');
-        return;
-      }
-
-      if (!reductionForm.number_of_units || parseFloat(reductionForm.number_of_units) <= 0) {
-        toast.error('Please enter valid units to remove');
-        return;
-      }
-
-      if (!reductionForm.remarks.trim()) {
-        toast.error('Remarks are mandatory for stock reduction');
-        return;
-      }
-
-      const unitsToReduce = parseFloat(reductionForm.number_of_units);
-      const selectedInventory = inventory.find(
-        (inv) =>
-          inv.material_id === reductionForm.material_id &&
-          inv.variant_id === reductionForm.variant_id
-      );
-
-      if (!selectedInventory) {
-        toast.error('Inventory item not found');
-        return;
-      }
-
-      if (unitsToReduce > selectedInventory.number_of_units) {
-        toast.error('Cannot reduce more units than available');
-        return;
-      }
-
-      const variant = variants.find((v) => v.variant_id === reductionForm.variant_id);
-      if (!variant) {
-        toast.error('Selected variant details not found');
-        return;
-      }
-
-      const quantityToReduce = unitsToReduce * variant.quantity_per_unit;
-      const remainingUnits = selectedInventory.number_of_units - unitsToReduce;
-      const remainingQuantity = selectedInventory.total_quantity - quantityToReduce;
-
-      setIsReducingStock(true);
-
-      const { error: movementLogError } = await supabase
-        .from('material_movement_logs')
-        .insert({
-          material_id: selectedInventory.material_id,
-          variant_id: selectedInventory.variant_id,
-          movement_type: 'Store Out',
-          quantity: quantityToReduce,
-          number_of_units: unitsToReduce,
-          reference_type: 'Manual Adjustment',
-          reference_id: selectedInventory.inventory_id,
-          notes: `Stock reduced from store. Remarks: ${reductionForm.remarks.trim()}`,
-          movement_date: new Date().toISOString()
-        });
-
-      if (movementLogError) throw movementLogError;
-
-      if (remainingUnits <= 0) {
-        const { error: deleteError } = await supabase
-          .from('store_inventory')
-          .delete()
-          .eq('inventory_id', selectedInventory.inventory_id);
-
-        if (deleteError) throw deleteError;
-      } else {
-        const { error: updateError } = await supabase
-          .from('store_inventory')
-          .update({
-            number_of_units: remainingUnits,
-            total_quantity: remainingQuantity,
-            last_updated: new Date().toISOString()
-          })
-          .eq('inventory_id', selectedInventory.inventory_id);
-
-        if (updateError) throw updateError;
-      }
-
-      toast.success('Stock reduced successfully');
-      resetReductionForm();
-      fetchInventory();
-      fetchStockEntryLogs();
-    } catch (error: any) {
-      toast.error('Failed to reduce stock: ' + error.message);
-    } finally {
-      setIsReducingStock(false);
-    }
-  };
-
-  const resetInventoryForm = () => {
-    setInventoryForm({
-      inventory_id: null,
-      material_id: null,
-      variant_id: null,
-      number_of_units: '',
-      location: '',
-      notes: '',
-      purchase_order_date: '',
-      invoice_number: '',
-      amount_per_unit: '',
-      gst: ''
-    });
-    setStockBillFile(null);
-  };
-
-  const openNewInventory = () => {
-    resetInventoryForm();
-    setIsInventoryDialogOpen(true);
-  };
-
-  const getVariantsForMaterial = (materialId: number | null) => {
-    if (!materialId) return [];
-    return variants.filter(v => v.material_id === materialId);
-  };
-
-  const unitsForPrice = parseFloat(inventoryForm.number_of_units);
-  const validUnitsForPrice = Number.isFinite(unitsForPrice) && unitsForPrice > 0 ? unitsForPrice : 0;
-
-  const amountPerUnitForPrice = parseFloat(inventoryForm.amount_per_unit);
-  const validAmountPerUnitForPrice = Number.isFinite(amountPerUnitForPrice) && amountPerUnitForPrice >= 0 ? amountPerUnitForPrice : 0;
-
-  const basePrice = validUnitsForPrice * validAmountPerUnitForPrice;
-  const gstInput = inventoryForm.gst.trim();
-  const todayDate = new Date().toISOString().split('T')[0];
-
-  let gstAmount = 0;
-  let gstDisplay = '-';
-
-  if (gstInput) {
-    if (gstInput.includes('%')) {
-      const gstRate = parseFloat(gstInput.replace('%', '').trim());
-      if (Number.isFinite(gstRate) && gstRate >= 0) {
-        gstAmount = (basePrice * gstRate) / 100;
-        gstDisplay = `${gstRate}%`;
-      }
-    } else {
-      const fixedGst = parseFloat(gstInput);
-      if (Number.isFinite(fixedGst) && fixedGst >= 0) {
-        gstAmount = fixedGst;
-        gstDisplay = 'Fixed';
-      }
-    }
-  }
-
-  const totalPrice = basePrice + gstAmount;
   const selectedStockEntryDetails = selectedStockLog ? parseStockEntryNotes(selectedStockLog.notes) : null;
 
   const openBillForLog = async (log: StockEntryLog) => {
@@ -1216,35 +905,173 @@ export default function StorePage() {
 
       {/* Fulfill Request Dialog */}
       <Dialog open={isFulfillDialogOpen} onOpenChange={setIsFulfillDialogOpen}>
-        <DialogContent className="bg-white max-w-2xl">
+        <DialogContent className="bg-white max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Fulfill Material Request</DialogTitle>
           </DialogHeader>
           {selectedRequest && (
             <div className="space-y-4 py-4">
-              <div className="bg-slate-50 p-4 rounded-lg space-y-2">
+              {/* Request summary */}
+              <div className="bg-slate-50 p-4 rounded-lg space-y-1 text-sm">
                 <p><span className="font-semibold">Request:</span> {selectedRequest.request_number}</p>
                 <p><span className="font-semibold">Project:</span> {selectedRequest.project_name}</p>
                 <p><span className="font-semibold">Material:</span> {selectedRequest.material_name}</p>
-                <p><span className="font-semibold">Requested Quantity:</span> {selectedRequest.requested_quantity} {selectedRequest.metric}</p>
+                <p><span className="font-semibold">Requested:</span> {selectedRequest.requested_quantity} {selectedRequest.metric}</p>
               </div>
 
-              <div className="space-y-2">
-                <Label>Quantity to Fulfill *</Label>
-                <Input
-                  type="number"
-                  step="0.001"
-                  min="0"
-                  value={fulfillQty}
-                  onChange={(e) => setFulfillQty(e.target.value)}
-                  className="bg-white"
-                  placeholder={`${selectedRequest.requested_quantity}`}
-                />
-                <p className="text-xs text-slate-500">
-                  Stock will be allocated from the store using FIFO across price variants (oldest purchase first). Cost is calculated at the exact variant prices consumed.
-                </p>
-              </div>
+              {/* Packaging-variant allocation grid */}
+              {selectedRequest.request_source === 'Store' && (() => {
+                // Group by PACKAGING variant (quantity_variant_id) — price tier is hidden from admin
+                const pkgMap = new Map<number, {
+                  qty_variant_id: number;
+                  qty_variant_name: string;
+                  quantity_per_unit: number;
+                  total_available: number;
+                }>();
+                stockPreview.forEach(b => {
+                  if (!b.quantity_variant_id) return;
+                  const key = b.quantity_variant_id;
+                  if (!pkgMap.has(key)) {
+                    pkgMap.set(key, {
+                      qty_variant_id:   key,
+                      qty_variant_name: b.quantity_variant_name ?? b.variant_name,
+                      quantity_per_unit: b.quantity_per_unit ?? 1,
+                      total_available:  0,
+                    });
+                  }
+                  pkgMap.get(key)!.total_available += Number(b.quantity_available);
+                });
+                const pkgVariants = Array.from(pkgMap.values());
 
+                const metric = selectedRequest.metric ?? '';
+
+                const totalAllocQty = pkgVariants.reduce((sum, v) => {
+                  const n   = parseFloat(variantUnits[v.qty_variant_id] ?? '');
+                  return sum + (isNaN(n) || n <= 0 ? 0 : n * v.quantity_per_unit);
+                }, 0);
+
+                const hasAnyUnits = totalAllocQty > 0;
+                const requested   = selectedRequest.requested_quantity;
+                const diff        = totalAllocQty - requested;
+
+                return (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-blue-600" />
+                      <Label className="text-xs font-semibold text-slate-700">
+                        Allocate Packaging — enter units to issue per variant
+                      </Label>
+                    </div>
+
+                    {stockPreviewLoading ? (
+                      <p className="text-xs text-slate-500 pl-1">Loading stock…</p>
+                    ) : pkgVariants.length === 0 ? (
+                      <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
+                        ⚠ No stock available for this material.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="rounded border text-xs overflow-hidden">
+                          <div className="bg-slate-100 grid grid-cols-[1fr_auto_auto_auto] gap-x-3 px-3 py-1.5 font-semibold text-slate-600">
+                            <span>Packaging</span>
+                            <span className="text-right">In Stock</span>
+                            <span className="text-right w-20">Units</span>
+                            <span className="text-right w-20">= {metric}</span>
+                          </div>
+                          {pkgVariants.map((v) => {
+                            const unitsVal = variantUnits[v.qty_variant_id] ?? '';
+                            const numUnits = parseFloat(unitsVal);
+                            const allocKg  = !isNaN(numUnits) && numUnits > 0
+                              ? numUnits * v.quantity_per_unit
+                              : null;
+                            const stockUnits = (v.total_available / v.quantity_per_unit).toFixed(1);
+                            return (
+                              <div
+                                key={v.qty_variant_id}
+                                className={`grid grid-cols-[1fr_auto_auto_auto] gap-x-3 px-3 py-2 items-center border-t transition-colors ${
+                                  allocKg ? 'bg-blue-50' : ''
+                                }`}
+                              >
+                                <div>
+                                  <div className="font-medium text-slate-800">
+                                    {v.qty_variant_name}
+                                  </div>
+                                  <div className="text-slate-400">
+                                    {v.quantity_per_unit} {metric}/unit · {v.total_available.toFixed(2)} {metric} total
+                                  </div>
+                                </div>
+                                <div className="text-right text-slate-500 shrink-0">
+                                  {stockUnits} units
+                                </div>
+                                <Input
+                                  type="number"
+                                  step="0.5"
+                                  min="0"
+                                  value={unitsVal}
+                                  onChange={(e) =>
+                                    setVariantUnits(prev => ({
+                                      ...prev,
+                                      [v.qty_variant_id]: e.target.value,
+                                    }))
+                                  }
+                                  className="bg-white w-20 text-right text-xs h-7 px-2"
+                                  placeholder="0"
+                                />
+                                <div className={`text-right font-semibold w-20 ${allocKg ? 'text-blue-700' : 'text-slate-300'}`}>
+                                  {allocKg !== null ? allocKg.toFixed(2) : '—'}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Running total */}
+                        {hasAnyUnits && (
+                          <div className={`text-xs rounded px-3 py-2 font-medium flex items-center justify-between border ${
+                            Math.abs(diff) < 0.001
+                              ? 'bg-green-50 text-green-700 border-green-200'
+                              : diff > 0
+                              ? 'bg-amber-50 text-amber-700 border-amber-200'
+                              : 'bg-blue-50 text-blue-700 border-blue-100'
+                          }`}>
+                            <span>Total: {totalAllocQty.toFixed(3)} {metric}</span>
+                            <span>
+                              {Math.abs(diff) < 0.001
+                                ? '✓ Exactly matches requested'
+                                : diff > 0
+                                ? `+${diff.toFixed(3)} ${metric} over requested`
+                                : `${Math.abs(diff).toFixed(3)} ${metric} short`}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Auto-FIFO fallback — shown only when no units entered */}
+                        {!hasAnyUnits && (
+                          <div className="space-y-1">
+                            <Label className="text-xs text-slate-600">
+                              Or: auto-fulfill quantity ({metric})
+                            </Label>
+                            <Input
+                              type="number"
+                              step="0.001"
+                              min="0"
+                              value={fulfillQty}
+                              onChange={(e) => setFulfillQty(e.target.value)}
+                              className="bg-white"
+                              placeholder={`${selectedRequest.requested_quantity}`}
+                            />
+                            <p className="text-xs text-slate-400">
+                              FIFO across all stock (oldest batch first). Enter units above for a specific mix.
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Approval notes */}
               <div className="space-y-2">
                 <Label>Approval Notes</Label>
                 <Textarea
@@ -1252,13 +1079,20 @@ export default function StorePage() {
                   onChange={(e) => setApprovalNotes(e.target.value)}
                   placeholder="Optional notes about this fulfillment"
                   className="bg-white"
-                  rows={3}
+                  rows={2}
                 />
               </div>
 
-              <div className="flex gap-2 pt-4">
-                <Button onClick={handleApproveRequest} className="flex-1 bg-green-600 hover:bg-green-700">
-                  <Check className="h-4 w-4 mr-2" /> Approve & Fulfill
+              <div className="flex gap-2 pt-2">
+                <Button
+                  onClick={handleApproveRequest}
+                  className="flex-1 bg-green-600 hover:bg-green-700"
+                  disabled={selectedRequest.request_source === 'Store' && stockPreview.length === 0}
+                >
+                  <Check className="h-4 w-4 mr-2" />
+                  {Object.values(variantUnits).some(u => parseFloat(u) > 0)
+                    ? 'Fulfill — custom mix (FIFO per variant)'
+                    : 'Fulfill — auto FIFO (all variants)'}
                 </Button>
                 <Button onClick={handleRejectRequest} variant="destructive" className="flex-1">
                   <X className="h-4 w-4 mr-2" /> Reject Request
