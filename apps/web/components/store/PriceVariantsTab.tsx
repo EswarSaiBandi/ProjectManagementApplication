@@ -176,7 +176,7 @@ export default function PriceVariantsTab() {
     else setRows((rowRes.data as VariantRow[]) || []);
 
     if (batchRes.error) toast.error('Failed to load batches: '        + batchRes.error.message);
-    else setBatches((batchRes.data as BatchRow[]) || []);
+    else setBatches((batchRes.data as unknown as BatchRow[]) || []);
 
     setLoading(false);
   }, []);
