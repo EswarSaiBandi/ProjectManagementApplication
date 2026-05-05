@@ -198,7 +198,7 @@ export default function ProjectInventoryTab({ projectId }: { projectId: string }
                                   <TableHead>Alloc. Status</TableHead>
                                   <TableHead>Variant</TableHead>
                                   <TableHead>Batch</TableHead>
-                                  <TableHead className="text-right">Unit Price</TableHead>
+                                  <TableHead className="text-right">Unit Price <span className="text-[10px] font-normal text-slate-400">(incl. GST)</span></TableHead>
                                   <TableHead className="text-right">Allocated</TableHead>
                                   <TableHead className="text-right">Used</TableHead>
                                   <TableHead className="text-right">Returned</TableHead>

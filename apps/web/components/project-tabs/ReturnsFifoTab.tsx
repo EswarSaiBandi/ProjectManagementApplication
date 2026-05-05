@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { QUANTITY_STEP, isQuarterMultiple } from '@/lib/quantity';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -269,6 +270,10 @@ export default function ReturnsFifoTab({ projectId }: { projectId: string }) {
       if (!pv) continue;
       const n = Number(raw);
       if (!Number.isFinite(n) || n <= 0) continue;
+      if (!isQuarterMultiple(n)) {
+        toast.error(`Units must be multiples of ${QUANTITY_STEP} (got ${n})`);
+        return;
+      }
 
       const qpu = pv.quantity_per_unit;
       const qty = qpu ? n * qpu : n;       // qpu null → input already in base metric
@@ -453,6 +458,7 @@ export default function ReturnsFifoTab({ projectId }: { projectId: string }) {
                                     </div>
                                     <div className="text-xs text-slate-500">
                                       Rs.{Number(v.unit_price).toFixed(2)}/{unit || 'unit'}
+                                      <span className="ml-1 text-[10px] text-slate-400">(incl. GST)</span>
                                       {v.quantity_per_unit && (
                                         <span className="ml-1 text-slate-400">
                                           · {v.quantity_per_unit}{unit}/unit
@@ -652,7 +658,7 @@ export default function ReturnsFifoTab({ projectId }: { projectId: string }) {
                                 </div>
                                 <Input
                                   type="number"
-                                  step="0.5"
+                                  step={QUANTITY_STEP}
                                   min="0"
                                   value={unitsVal}
                                   onChange={(e) =>

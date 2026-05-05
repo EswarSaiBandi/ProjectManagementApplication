@@ -15,6 +15,7 @@ import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X, Layers } from
 import { toast } from 'sonner';
 import PriceVariantsTab from '@/components/store/PriceVariantsTab';
 import StoreInventoryAggregateTab from '@/components/store/StoreInventoryAggregateTab';
+import { QUANTITY_STEP, isQuarterMultiple, parseQuarterQty } from '@/lib/quantity';
 
 interface Material {
   material_id: number;
@@ -374,8 +375,8 @@ export default function StorePage() {
       if (from !== null && ts < from) return false;
       if (to !== null && ts > to) return false;
 
-      const parsed = parseStockEntryNotes(log.notes);
-      if (inv && !parsed.invoiceNumber.toLowerCase().includes(inv)) return false;
+      const notes = (log.notes || '').toLowerCase();
+      if (inv && !notes.includes(inv)) return false;
 
       if (q) {
         const hay = [
@@ -383,7 +384,7 @@ export default function StorePage() {
           log.variant_name,
           log.project_name,
           log.created_by_name,
-          parsed.invoiceNumber,
+          log.notes,
         ].filter(Boolean).join(' ').toLowerCase();
         if (!hay.includes(q)) return false;
       }
@@ -425,6 +426,15 @@ export default function StorePage() {
       }
     });
 
+    // Validate each per-variant unit count as a 0.25 multiple before building allocations.
+    for (const [qvidStr, unitsStr] of Object.entries(variantUnits)) {
+      if (!unitsStr || parseFloat(unitsStr) <= 0) continue;
+      if (!isQuarterMultiple(parseFloat(unitsStr))) {
+        toast.error(`Units must be multiples of ${QUANTITY_STEP} (got ${unitsStr})`);
+        return;
+      }
+    }
+
     const allocations = Object.entries(variantUnits)
       .map(([qvidStr, unitsStr]) => {
         const qvid = parseInt(qvidStr);
@@ -439,11 +449,14 @@ export default function StorePage() {
     if (allocations.length > 0) {
       qty = allocations.reduce((s, a) => s + a.qty, 0);
     } else {
-      qty = parseFloat(fulfillQty);
-      if (!qty || qty <= 0) {
-        toast.error('Enter units above per variant, or set a quantity for auto-FIFO');
+      const parsed = parseQuarterQty(fulfillQty, { label: 'Quantity' });
+      if (!parsed.ok) {
+        toast.error(parsed.error === 'Quantity is required'
+          ? 'Enter units above per variant, or set a quantity for auto-FIFO'
+          : parsed.error);
         return;
       }
+      qty = parsed.value;
     }
 
     try {
@@ -1149,7 +1162,7 @@ export default function StorePage() {
                                 </div>
                                 <Input
                                   type="number"
-                                  step="0.5"
+                                  step={QUANTITY_STEP}
                                   min="0"
                                   value={unitsVal}
                                   onChange={(e) =>
@@ -1197,7 +1210,7 @@ export default function StorePage() {
                             </Label>
                             <Input
                               type="number"
-                              step="0.001"
+                              step={QUANTITY_STEP}
                               min="0"
                               value={fulfillQty}
                               onChange={(e) => setFulfillQty(e.target.value)}

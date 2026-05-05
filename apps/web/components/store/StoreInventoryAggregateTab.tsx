@@ -109,8 +109,8 @@ export default function StoreInventoryAggregateTab() {
                 <TableHead className="text-right">Variants</TableHead>
                 <TableHead className="text-right">Received (total)</TableHead>
                 <TableHead className="text-right">Available</TableHead>
-                <TableHead className="text-right">Price Range</TableHead>
-                <TableHead className="text-right">Stock Value</TableHead>
+                <TableHead className="text-right">Price Range <span className="text-[10px] font-normal text-slate-400">(incl. GST)</span></TableHead>
+                <TableHead className="text-right">Stock Value <span className="text-[10px] font-normal text-slate-400">(incl. GST)</span></TableHead>
                 <TableHead>Status</TableHead>
               </TableRow>
             </TableHeader>

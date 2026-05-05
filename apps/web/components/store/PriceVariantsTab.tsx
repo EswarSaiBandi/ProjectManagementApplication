@@ -17,6 +17,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { supabase } from '@/lib/supabase';
+import { QUANTITY_STEP, parseQuarterQty } from '@/lib/quantity';
 import {
   Plus, Package, Pause, Play, Upload, IndianRupee,
   AlertTriangle, ChevronDown, ChevronRight, Layers,
@@ -336,8 +337,9 @@ export default function PriceVariantsTab() {
 
   const handleAddStock = async () => {
     if (!addStockForm.variant_id) { toast.error('Select a price variant'); return; }
-    const units = parseFloat(addStockForm.number_of_units);
-    if (!units || units <= 0)     { toast.error('Number of units must be > 0'); return; }
+    const unitsParsed = parseQuarterQty(addStockForm.number_of_units, { label: 'Number of units' });
+    if (!unitsParsed.ok) { toast.error(unitsParsed.error); return; }
+    const units = unitsParsed.value;
 
     setAddingStock(true);
     let billPath: string | null = null;
@@ -386,8 +388,9 @@ export default function PriceVariantsTab() {
     if (!reduceForm.reason.trim())       { toast.error('Reason is required'); return; }
 
     const qvId = parseInt(reduceForm.quantity_variant_id);
-    const units = parseFloat(reduceForm.units);
-    if (!units || units <= 0) { toast.error('Units must be > 0'); return; }
+    const unitsParsed = parseQuarterQty(reduceForm.units, { label: 'Units' });
+    if (!unitsParsed.ok) { toast.error(unitsParsed.error); return; }
+    const units = unitsParsed.value;
     const qpu = rows.find(r => r.quantity_variant_id === qvId && r.material_id === parseInt(reduceForm.material_id))?.quantity_per_unit ?? 1;
     const qty = units * qpu;
 
@@ -786,9 +789,9 @@ export default function PriceVariantsTab() {
 
                         {selectedPkg && qpu ? (
                           <div className="space-y-2">
-                            <Label>Number of {selectedPkg.qty_variant_name}s *</Label>
+                            <Label>Number of {selectedPkg.qty_variant_name}s * <span className="text-xs text-slate-400">(multiples of {QUANTITY_STEP})</span></Label>
                             <Input
-                              type="number" step="0.5" min="0"
+                              type="number" step={QUANTITY_STEP} min={QUANTITY_STEP}
                               value={reduceForm.units}
                               onChange={(e) => setReduceForm({ ...reduceForm, units: e.target.value })}
                               placeholder={`e.g. ${Math.floor(selectedPkg.available / qpu)}`}
@@ -930,9 +933,10 @@ export default function PriceVariantsTab() {
                         ? `Number of ${selectedAddStockVariant.quantity_variant_name}s *`
                         : 'Quantity *'
                       }
+                      <span className="text-xs text-slate-400 ml-1">(multiples of {QUANTITY_STEP})</span>
                     </Label>
                     <Input
-                      type="number" step="0.001" min="0"
+                      type="number" step={QUANTITY_STEP} min={QUANTITY_STEP}
                       value={addStockForm.number_of_units}
                       onChange={(e) => setAddStockForm({ ...addStockForm, number_of_units: e.target.value })}
                       placeholder={
@@ -1056,11 +1060,11 @@ export default function PriceVariantsTab() {
                       <TableHead className="w-6" />
                       <TableHead>Packaging Variant</TableHead>
                       <TableHead>Price Variant Label</TableHead>
-                      <TableHead className="text-right">Unit Price</TableHead>
+                      <TableHead className="text-right">Unit Price <span className="text-[10px] font-normal text-slate-400">(incl. GST)</span></TableHead>
                       <TableHead className="text-right">Batches</TableHead>
                       <TableHead className="text-right">Units Rcvd</TableHead>
                       <TableHead className="text-right">Qty Available</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
+                      <TableHead className="text-right">Value <span className="text-[10px] font-normal text-slate-400">(incl. GST)</span></TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Action</TableHead>
                     </TableRow>

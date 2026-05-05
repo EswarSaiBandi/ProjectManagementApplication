@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { QUANTITY_STEP, isQuarterMultiple } from "@/lib/quantity";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -207,6 +208,10 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
       const qty = Number(selectedQtyByMaterial[materialId]);
       if (!Number.isFinite(qty) || qty <= 0) {
         toast.error("Quantities must be positive numbers");
+        return;
+      }
+      if (!isQuarterMultiple(qty)) {
+        toast.error(`Quantity must be a multiple of ${QUANTITY_STEP} (got ${qty})`);
         return;
       }
     }
@@ -446,6 +451,7 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
                                 <TableCell>
                                   <Input
                                     type="number"
+                                    step={QUANTITY_STEP}
                                     min={0}
                                     value={selectedQtyByMaterial[m.material_id] ?? ""}
                                     onChange={(e) =>
@@ -456,6 +462,7 @@ export default function PurchaseRequestTab({ projectId }: { projectId: string })
                                     }
                                     disabled={!selected}
                                     className="bg-white"
+                                    placeholder={`multiples of ${QUANTITY_STEP}`}
                                   />
                                 </TableCell>
                               </TableRow>

@@ -10,22 +10,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { supabase } from '@/lib/supabase';
-import { Plus, Package, Clock, CheckCircle, XCircle, AlertCircle, Layers } from 'lucide-react';
+import { QUANTITY_STEP, parseQuarterQty } from '@/lib/quantity';
+import { Plus, Package, Clock, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface Material {
   material_id: number;
   material_name: string;
   metric: string;
-}
-
-interface StoreVariantStock {
-  variant_id: number;
-  variant_name: string;
-  quantity_variant_name: string | null;
-  quantity_per_unit: number | null;
-  unit_price: number;
-  quantity_available: number;
 }
 
 interface MaterialRequest {
@@ -52,9 +44,6 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
   const [loading, setLoading] = useState(true);
 
   const [isRequestDialogOpen, setIsRequestDialogOpen] = useState(false);
-
-  const [storeVariantStock, setStoreVariantStock] = useState<StoreVariantStock[]>([]);
-  const [storeStockLoading, setStoreStockLoading] = useState(false);
 
   const [requestForm, setRequestForm] = useState({
     material_id: null as number | null,
@@ -84,19 +73,6 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
       .eq('is_active', true)
       .order('material_name');
     setMaterials(data || []);
-  };
-
-  const fetchStoreStock = async (materialId: number) => {
-    setStoreVariantStock([]);
-    setStoreStockLoading(true);
-    const { data } = await supabase
-      .from('active_price_variants_dropdown')
-      .select('variant_id, variant_name, quantity_variant_name, quantity_per_unit, unit_price, quantity_available')
-      .eq('material_id', materialId)
-      .gt('quantity_available', 0)
-      .order('variant_id', { ascending: true });
-    setStoreVariantStock((data as StoreVariantStock[]) || []);
-    setStoreStockLoading(false);
   };
 
   const fetchRequests = async () => {
@@ -129,12 +105,9 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
         toast.error('Please select a material');
         return;
       }
-      if (!requestForm.requested_quantity || parseFloat(requestForm.requested_quantity) <= 0) {
-        toast.error('Please enter a valid quantity');
-        return;
-      }
-
-      const qty = parseFloat(requestForm.requested_quantity);
+      const parsedQty = parseQuarterQty(requestForm.requested_quantity, { label: 'Quantity' });
+      if (!parsedQty.ok) { toast.error(parsedQty.error); return; }
+      const qty = parsedQty.value;
 
       const { data: inserted, error } = await supabase
         .from('material_requests')
@@ -234,7 +207,6 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
       required_by: '',
       purpose: ''
     });
-    setStoreVariantStock([]);
   };
 
   const openNewRequest = () => {
@@ -302,9 +274,7 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
                         <Select
                           value={requestForm.material_id?.toString()}
                           onValueChange={(v) => {
-                            const id = parseInt(v);
-                            setRequestForm({ ...requestForm, material_id: id });
-                            if (requestForm.request_source === 'Store') fetchStoreStock(id);
+                            setRequestForm({ ...requestForm, material_id: parseInt(v) });
                           }}
                         >
                           <SelectTrigger className="bg-white">
@@ -325,14 +295,7 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
                         <Label>Request Source *</Label>
                         <Select
                           value={requestForm.request_source}
-                          onValueChange={(v) => {
-                            setRequestForm({ ...requestForm, request_source: v });
-                            if (v === 'Store' && requestForm.material_id) {
-                              fetchStoreStock(requestForm.material_id);
-                            } else {
-                              setStoreVariantStock([]);
-                            }
-                          }}
+                          onValueChange={(v) => setRequestForm({ ...requestForm, request_source: v })}
                         >
                           <SelectTrigger className="bg-white">
                             <SelectValue />
@@ -344,90 +307,17 @@ export default function MaterialRequestTab({ projectId }: { projectId: string })
                         </Select>
                       </div>
 
-                      {/* 3 — Store stock availability by variant (only shown when source = Store) */}
-                      {requestForm.material_id && requestForm.request_source === 'Store' && (
-                        <div className="space-y-1.5">
-                          <div className="flex items-center gap-1.5">
-                            <Layers className="h-3.5 w-3.5 text-blue-500" />
-                            <span className="text-xs font-semibold text-slate-600">
-                              Available in Store
-                            </span>
-                          </div>
-                          {storeStockLoading ? (
-                            <p className="text-xs text-slate-400 pl-1">Loading…</p>
-                          ) : storeVariantStock.length === 0 ? (
-                            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                              ⚠ No stock available for this material in the store.
-                            </div>
-                          ) : (
-                            <div className="rounded border text-xs overflow-hidden">
-                              <div className="bg-slate-100 grid grid-cols-[1fr_auto_auto] gap-x-3 px-3 py-1.5 font-semibold text-slate-600">
-                                <span>Packaging Variant</span>
-                                <span className="text-right">Price / unit</span>
-                                <span className="text-right">Available</span>
-                              </div>
-                              <div className="divide-y max-h-32 overflow-y-auto">
-                                {storeVariantStock.map((sv) => {
-                                  const metric = materials.find(m => m.material_id === requestForm.material_id)?.metric || '';
-                                  const pricePerPkg = sv.quantity_per_unit
-                                    ? Number(sv.unit_price) * Number(sv.quantity_per_unit)
-                                    : null;
-                                  const unitsAvail = sv.quantity_per_unit && sv.quantity_per_unit > 0
-                                    ? `${(Number(sv.quantity_available) / sv.quantity_per_unit).toFixed(1)} units`
-                                    : null;
-                                  return (
-                                    <div key={sv.variant_id} className="grid grid-cols-[1fr_auto_auto] gap-x-3 px-3 py-1.5 items-start">
-                                      <div>
-                                        <div className="font-medium text-slate-700">
-                                          {sv.quantity_variant_name ?? sv.variant_name}
-                                        </div>
-                                        {sv.quantity_per_unit && (
-                                          <div className="text-slate-400">
-                                            {sv.quantity_per_unit} {metric}/unit
-                                          </div>
-                                        )}
-                                      </div>
-                                      <div className="text-right text-slate-600 pt-0.5">
-                                        {pricePerPkg !== null ? (
-                                          <>
-                                            <div>Rs.{pricePerPkg.toFixed(2)}/{sv.quantity_variant_name ?? 'unit'}</div>
-                                            <div className="text-slate-400">= Rs.{Number(sv.unit_price).toFixed(4)}/{metric}</div>
-                                          </>
-                                        ) : (
-                                          <div>Rs.{Number(sv.unit_price).toFixed(2)}/{metric || 'unit'}</div>
-                                        )}
-                                      </div>
-                                      <div className="text-right pt-0.5">
-                                        <div className="font-semibold text-slate-800">
-                                          {Number(sv.quantity_available).toFixed(3)} {metric}
-                                        </div>
-                                        {unitsAvail && <div className="text-slate-400">{unitsAvail}</div>}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                              <div className="bg-slate-50 grid grid-cols-[1fr_auto] gap-x-3 px-3 py-1.5 font-semibold border-t">
-                                <span>Total Available</span>
-                                <span className="text-right">
-                                  {storeVariantStock.reduce((s, sv) => s + Number(sv.quantity_available), 0).toFixed(3)}{' '}
-                                  {materials.find(m => m.material_id === requestForm.material_id)?.metric || ''}
-                                </span>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
 
                       {/* 4 — Quantity */}
                       <div className="space-y-2">
                         <Label>Quantity *</Label>
                         <Input
                           type="number"
-                          step="0.01"
+                          step={QUANTITY_STEP}
+                          min={QUANTITY_STEP}
                           value={requestForm.requested_quantity}
                           onChange={(e) => setRequestForm({ ...requestForm, requested_quantity: e.target.value })}
-                          placeholder="Enter quantity"
+                          placeholder={`Enter quantity (multiples of ${QUANTITY_STEP})`}
                           className="bg-white"
                         />
                         {requestForm.material_id && (

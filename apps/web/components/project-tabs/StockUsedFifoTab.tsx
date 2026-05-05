@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { QUANTITY_STEP, parseQuarterQty } from '@/lib/quantity';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -59,9 +60,9 @@ function toUnits(qty: number, qtyPerUnit: number | null): string | null {
 
 function variantLabel(v: VariantBreakdown, metric: string | null): string {
   if (v.quantity_variant_name) {
-    return `${v.quantity_variant_name} @ Rs.${Number(v.unit_price).toFixed(2)}/${metric ?? 'unit'}`;
+    return `${v.quantity_variant_name} @ Rs.${Number(v.unit_price).toFixed(2)}/${metric ?? 'unit'} (incl. GST)`;
   }
-  return `${v.variant_name} @ Rs.${Number(v.unit_price).toFixed(2)}/${metric ?? 'unit'}`;
+  return `${v.variant_name} @ Rs.${Number(v.unit_price).toFixed(2)}/${metric ?? 'unit'} (incl. GST)`;
 }
 
 /* ─────────────────────────── Component ─────────────────────────── */
@@ -195,8 +196,9 @@ export default function StockUsedFifoTab({ projectId }: { projectId: string }) {
     if (mvInput === null) { toast.error('Pick a packaging variant first'); return; }
 
     const qpu = selected.variants.find(v => v.quantity_variant_id === mvInput)?.quantity_per_unit ?? null;
-    const units = Number(unitsInput);
-    if (!units || units <= 0) { toast.error('Units must be > 0'); return; }
+    const unitsParsed = parseQuarterQty(String(unitsInput), { label: 'Units' });
+    if (!unitsParsed.ok) { toast.error(unitsParsed.error); return; }
+    const units = unitsParsed.value;
     const qty = units * (qpu ?? 1);
 
     setSaving(true);
@@ -346,6 +348,7 @@ export default function StockUsedFifoTab({ projectId }: { projectId: string }) {
                                     </div>
                                     <div className="text-xs text-slate-500">
                                       Rs.{Number(v.unit_price).toFixed(2)}/{unit || 'unit'}
+                                      <span className="ml-1 text-[10px] text-slate-400">(incl. GST)</span>
                                       {v.quantity_per_unit && (
                                         <span className="ml-1 text-slate-400">
                                           · {v.quantity_per_unit}{unit}/unit
@@ -490,9 +493,9 @@ export default function StockUsedFifoTab({ projectId }: { projectId: string }) {
                     {/* Units input — shown only after a packaging variant is picked. */}
                     {selPkg && qpu ? (
                       <div className="space-y-1.5">
-                        <Label>Number of {selPkg.qty_variant_name}s *</Label>
+                        <Label>Number of {selPkg.qty_variant_name}s * <span className="text-xs text-slate-400">(multiples of {QUANTITY_STEP})</span></Label>
                         <Input
-                          type="number" step="0.5" min={0}
+                          type="number" step={QUANTITY_STEP} min={QUANTITY_STEP}
                           value={unitsInput}
                           onChange={(e) => setUnitsInput(e.target.value)}
                           placeholder={`e.g. ${Math.floor(selPkg.qty_available / qpu)}`}
