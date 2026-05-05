@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { supabase } from '@/lib/supabase';
 import { ArrowDownUp, ArrowDown, ArrowUp, RefreshCw, Package } from 'lucide-react';
@@ -21,10 +23,12 @@ interface MovementLog {
   reference_id: number | null;
   notes: string | null;
   movement_date: string;
+  created_by: string | null;
   material_name?: string;
   metric?: string;
   variant_name?: string;
   project_name?: string;
+  created_by_name?: string | null;
 }
 
 type ParsedMovementNotes = {
@@ -45,6 +49,11 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
   const [filterType, setFilterType] = useState<string>('all');
   const [filterProjectId, setFilterProjectId] = useState<string>('all');
   const [filterMaterialId, setFilterMaterialId] = useState<string>('all');
+  const [filterCreatedBy, setFilterCreatedBy] = useState<string>('all');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
+  const [filterInvoice, setFilterInvoice] = useState('');
   const [selectedLog, setSelectedLog] = useState<MovementLog | null>(null);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
 
@@ -77,15 +86,19 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
   }, [logs]);
 
+  const creatorFilterOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const log of logs) {
+      if (log.created_by) {
+        map.set(log.created_by, log.created_by_name || log.created_by);
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [logs]);
+
   useEffect(() => {
     let result = logs;
-    if (filterType === 'all') {
-      // keep all
-    } else if (filterType === 'Stock Reduction') {
-      result = result.filter(
-        (log) => log.movement_type === 'Store Out' && log.reference_type === 'Manual Adjustment'
-      );
-    } else {
+    if (filterType !== 'all') {
       result = result.filter((log) => log.movement_type === filterType);
     }
 
@@ -103,8 +116,40 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
       result = result.filter((log) => log.material_id === mid);
     }
 
+    if (filterCreatedBy !== 'all') {
+      result = result.filter((log) => log.created_by === filterCreatedBy);
+    }
+
+    if (filterDateFrom) {
+      const from = new Date(filterDateFrom).getTime();
+      result = result.filter((log) => new Date(log.movement_date).getTime() >= from);
+    }
+    if (filterDateTo) {
+      const to = new Date(filterDateTo).getTime() + 24 * 60 * 60 * 1000 - 1;
+      result = result.filter((log) => new Date(log.movement_date).getTime() <= to);
+    }
+
+    const inv = filterInvoice.trim().toLowerCase();
+    if (inv) {
+      result = result.filter((log) => (log.notes || '').toLowerCase().includes(inv));
+    }
+
+    const q = filterSearch.trim().toLowerCase();
+    if (q) {
+      result = result.filter((log) => {
+        const hay = [
+          log.material_name,
+          log.variant_name,
+          log.project_name,
+          log.created_by_name,
+          log.notes,
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
     setFilteredLogs(result);
-  }, [filterType, filterProjectId, filterMaterialId, logs, projectId]);
+  }, [filterType, filterProjectId, filterMaterialId, filterCreatedBy, filterDateFrom, filterDateTo, filterSearch, filterInvoice, logs, projectId]);
 
   const fetchLogs = async () => {
     try {
@@ -125,15 +170,32 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
       const { data, error } = await query.limit(200);
       
       if (error) throw error;
-      
+
+      // No FK from material_movement_logs.created_by to public.profiles (FK is to auth.users),
+      // so PostgREST can't embed profiles directly — resolve names via a separate lookup.
+      const userIds = Array.from(new Set(
+        (data || []).map((log: any) => log.created_by).filter((id: string | null): id is string => !!id)
+      ));
+      const nameByUserId = new Map<string, string>();
+      if (userIds.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('user_id, full_name')
+          .in('user_id', userIds);
+        for (const p of profs || []) {
+          if (p.full_name) nameByUserId.set(p.user_id, p.full_name);
+        }
+      }
+
       const logsWithDetails = (data || []).map((log: any) => ({
         ...log,
         material_name: log.materials_master?.material_name,
         metric: log.materials_master?.metric,
         variant_name: log.material_variants?.variant_name,
-        project_name: log.projects?.project_name
+        project_name: log.projects?.project_name,
+        created_by_name: log.created_by ? nameByUserId.get(log.created_by) ?? null : null,
       }));
-      
+
       setLogs(logsWithDetails);
     } catch (error: any) {
       toast.error('Failed to load movement logs: ' + error.message);
@@ -142,12 +204,7 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
     }
   };
 
-  const getDisplayMovementType = (log: MovementLog) => {
-    if (log.movement_type === 'Store Out' && log.reference_type === 'Manual Adjustment') {
-      return 'Stock Reduction';
-    }
-    return log.movement_type;
-  };
+  const getDisplayMovementType = (log: MovementLog) => log.movement_type;
 
   const getMovementIcon = (type: string) => {
     switch (type) {
@@ -155,7 +212,7 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
         return <ArrowDown className="h-4 w-4 text-green-600" />;
       case 'Store Out':
         return <ArrowUp className="h-4 w-4 text-orange-600" />;
-      case 'Stock Reduction':
+      case 'Damage / Write-off':
         return <ArrowUp className="h-4 w-4 text-red-600" />;
       case 'Project In':
         return <ArrowDown className="h-4 w-4 text-blue-600" />;
@@ -178,7 +235,7 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
         return 'bg-green-100 text-green-700';
       case 'Store Out':
         return 'bg-orange-100 text-orange-700';
-      case 'Stock Reduction':
+      case 'Damage / Write-off':
         return 'bg-red-100 text-red-700';
       case 'Project In':
         return 'bg-blue-100 text-blue-700';
@@ -274,7 +331,7 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
                   <SelectItem value="all">All Movements</SelectItem>
                   <SelectItem value="Store In">Store In</SelectItem>
                   <SelectItem value="Store Out">Store Out</SelectItem>
-                  <SelectItem value="Stock Reduction">Stock Reduction</SelectItem>
+                  <SelectItem value="Damage / Write-off">Damage / Write-off</SelectItem>
                   <SelectItem value="Project In">Project In</SelectItem>
                   <SelectItem value="Project Out">Project Out</SelectItem>
                   <SelectItem value="Return to Store">Return to Store</SelectItem>
@@ -313,10 +370,62 @@ export default function MovementLogsTab({ projectId }: { projectId?: string }) {
                   ))}
                 </SelectContent>
               </Select>
+              <Select value={filterCreatedBy} onValueChange={setFilterCreatedBy}>
+                <SelectTrigger className="w-[180px] bg-white">
+                  <SelectValue placeholder="Created by" />
+                </SelectTrigger>
+                <SelectContent className="bg-white max-h-72">
+                  <SelectItem value="all">All users</SelectItem>
+                  {creatorFilterOptions.map(([uid, name]) => (
+                    <SelectItem key={uid} value={uid}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Badge variant="outline" className="px-3 py-1">
                 {filteredLogs.length} {filteredLogs.length === 1 ? 'log' : 'logs'}
               </Badge>
             </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 mt-3">
+            <Input
+              value={filterSearch}
+              onChange={(e) => setFilterSearch(e.target.value)}
+              placeholder="Search material / variant / project / user / notes"
+              className="w-[300px] bg-white"
+            />
+            <Input
+              value={filterInvoice}
+              onChange={(e) => setFilterInvoice(e.target.value)}
+              placeholder="Invoice # in notes"
+              className="w-[180px] bg-white"
+            />
+            <Input
+              type="date"
+              value={filterDateFrom}
+              onChange={(e) => setFilterDateFrom(e.target.value)}
+              className="w-[150px] bg-white"
+              title="From date"
+            />
+            <Input
+              type="date"
+              value={filterDateTo}
+              onChange={(e) => setFilterDateTo(e.target.value)}
+              className="w-[150px] bg-white"
+              title="To date"
+            />
+            {(filterSearch || filterInvoice || filterDateFrom || filterDateTo || filterType !== 'all' || filterMaterialId !== 'all' || filterCreatedBy !== 'all' || (!projectId && filterProjectId !== 'all')) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setFilterSearch(''); setFilterInvoice(''); setFilterDateFrom(''); setFilterDateTo('');
+                  setFilterType('all'); setFilterMaterialId('all'); setFilterCreatedBy('all');
+                  if (!projectId) setFilterProjectId('all');
+                }}
+              >
+                Clear
+              </Button>
+            )}
           </div>
         </CardHeader>
         <CardContent className="p-0">

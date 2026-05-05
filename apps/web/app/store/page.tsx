@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -85,10 +85,12 @@ interface StockEntryLog {
   number_of_units: number | null;
   notes: string | null;
   movement_date: string;
+  created_by: string | null;
   material_name?: string;
   variant_name?: string;
   metric?: string;
   project_name?: string | null;
+  created_by_name?: string | null;
 }
 
 const STOCK_META_PREFIX = '[STOCK_META]';
@@ -116,6 +118,14 @@ export default function StorePage() {
   const [returnReviewNotes, setReturnReviewNotes] = useState('');
   const [selectedStockLog, setSelectedStockLog] = useState<StockEntryLog | null>(null);
   const [isStockLogDialogOpen, setIsStockLogDialogOpen] = useState(false);
+
+  // Stock Entry Logs filters
+  const [logSearch, setLogSearch] = useState('');
+  const [logInvoice, setLogInvoice] = useState('');
+  const [logDateFrom, setLogDateFrom] = useState('');
+  const [logDateTo, setLogDateTo] = useState('');
+  const [logCreatedBy, setLogCreatedBy] = useState('all');
+  const [logType, setLogType] = useState('all');
 
   const [stockPreview, setStockPreview] = useState<StockBatchPreview[]>([]);
   const [stockPreviewLoading, setStockPreviewLoading] = useState(false);
@@ -221,6 +231,7 @@ export default function StorePage() {
         number_of_units,
         notes,
         movement_date,
+        created_by,
         materials_master!inner(material_name, metric),
         material_variants(variant_name),
         projects(project_name)
@@ -230,7 +241,7 @@ export default function StorePage() {
       // and return-acceptance receipts. The companion Store In/Out rows for
       // MR/return flows keep project_id set for audit linkage, so we filter
       // on movement_type alone.
-      .in('movement_type', ['Store In', 'Store Out'])
+      .in('movement_type', ['Store In', 'Store Out', 'Damage / Write-off'])
       .order('movement_date', { ascending: false })
       .limit(200);
 
@@ -239,12 +250,29 @@ export default function StorePage() {
       return;
     }
 
+    // No FK from material_movement_logs.created_by to public.profiles (FK is to auth.users),
+    // so PostgREST can't embed profiles directly — resolve names via a separate lookup.
+    const userIds = Array.from(new Set(
+      (data || []).map((log: any) => log.created_by).filter((id: string | null): id is string => !!id)
+    ));
+    const nameByUserId = new Map<string, string>();
+    if (userIds.length > 0) {
+      const { data: profs } = await supabase
+        .from('profiles')
+        .select('user_id, full_name')
+        .in('user_id', userIds);
+      for (const p of profs || []) {
+        if (p.full_name) nameByUserId.set(p.user_id, p.full_name);
+      }
+    }
+
     const logsWithDetails = (data || []).map((log: any) => ({
       ...log,
       material_name: log.materials_master?.material_name,
       metric: log.materials_master?.metric,
       variant_name: log.material_variants?.variant_name,
       project_name: log.projects?.project_name ?? null,
+      created_by_name: log.created_by ? nameByUserId.get(log.created_by) ?? null : null,
     }));
 
     setStockEntryLogs(logsWithDetails);
@@ -320,6 +348,48 @@ export default function StorePage() {
       billBucket: 'documents'
     };
   };
+
+  // Unique creators across currently-loaded logs (for the Created By filter).
+  const stockLogCreatorOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const log of stockEntryLogs) {
+      if (log.created_by) {
+        map.set(log.created_by, log.created_by_name || log.created_by);
+      }
+    }
+    return Array.from(map.entries());
+  }, [stockEntryLogs]);
+
+  const filteredStockEntryLogs = useMemo(() => {
+    const q = logSearch.trim().toLowerCase();
+    const inv = logInvoice.trim().toLowerCase();
+    const from = logDateFrom ? new Date(logDateFrom).getTime() : null;
+    const to = logDateTo ? new Date(logDateTo).getTime() + 24 * 60 * 60 * 1000 - 1 : null;
+
+    return stockEntryLogs.filter((log) => {
+      if (logType !== 'all' && log.movement_type !== logType) return false;
+      if (logCreatedBy !== 'all' && log.created_by !== logCreatedBy) return false;
+
+      const ts = new Date(log.movement_date).getTime();
+      if (from !== null && ts < from) return false;
+      if (to !== null && ts > to) return false;
+
+      const parsed = parseStockEntryNotes(log.notes);
+      if (inv && !parsed.invoiceNumber.toLowerCase().includes(inv)) return false;
+
+      if (q) {
+        const hay = [
+          log.material_name,
+          log.variant_name,
+          log.project_name,
+          log.created_by_name,
+          parsed.invoiceNumber,
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [stockEntryLogs, logSearch, logInvoice, logDateFrom, logDateTo, logCreatedBy, logType]);
 
   const openFulfillDialog = async (request: MaterialRequest) => {
     setSelectedRequest(request);
@@ -591,11 +661,76 @@ export default function StorePage() {
           {/* Stock Entry Logs Tab */}
           <TabsContent value="stock-entry-logs" className="space-y-4">
             <Card className="bg-white shadow-sm">
-              <CardHeader className="border-b bg-slate-50">
+              <CardHeader className="border-b bg-slate-50 space-y-3">
                 <CardTitle className="flex items-center gap-2">
                   <ClipboardList className="h-5 w-5 text-blue-600" />
-                  Stock Entry Logs ({stockEntryLogs.length})
+                  Stock Entry Logs
+                  <span className="text-sm font-normal text-slate-500 ml-1">
+                    ({filteredStockEntryLogs.length} of {stockEntryLogs.length})
+                  </span>
                 </CardTitle>
+                <div className="flex flex-wrap gap-2 items-center">
+                  <Input
+                    value={logSearch}
+                    onChange={(e) => setLogSearch(e.target.value)}
+                    placeholder="Search material / variant / project / user"
+                    className="w-[280px] bg-white"
+                  />
+                  <Input
+                    value={logInvoice}
+                    onChange={(e) => setLogInvoice(e.target.value)}
+                    placeholder="Invoice #"
+                    className="w-[160px] bg-white"
+                  />
+                  <Input
+                    type="date"
+                    value={logDateFrom}
+                    onChange={(e) => setLogDateFrom(e.target.value)}
+                    className="w-[150px] bg-white"
+                    title="From date"
+                  />
+                  <Input
+                    type="date"
+                    value={logDateTo}
+                    onChange={(e) => setLogDateTo(e.target.value)}
+                    className="w-[150px] bg-white"
+                    title="To date"
+                  />
+                  <Select value={logType} onValueChange={setLogType}>
+                    <SelectTrigger className="w-[180px] bg-white">
+                      <SelectValue placeholder="Movement type" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectItem value="all">All types</SelectItem>
+                      <SelectItem value="Store In">Store In</SelectItem>
+                      <SelectItem value="Store Out">Store Out</SelectItem>
+                      <SelectItem value="Damage / Write-off">Damage / Write-off</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={logCreatedBy} onValueChange={setLogCreatedBy}>
+                    <SelectTrigger className="w-[180px] bg-white">
+                      <SelectValue placeholder="Created by" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectItem value="all">All users</SelectItem>
+                      {stockLogCreatorOptions.map(([uid, name]) => (
+                        <SelectItem key={uid} value={uid}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {(logSearch || logInvoice || logDateFrom || logDateTo || logType !== 'all' || logCreatedBy !== 'all') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setLogSearch(''); setLogInvoice(''); setLogDateFrom(''); setLogDateTo('');
+                        setLogType('all'); setLogCreatedBy('all');
+                      }}
+                    >
+                      Clear
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 <div className="overflow-x-auto">
@@ -618,14 +753,14 @@ export default function StorePage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y">
-                      {stockEntryLogs.length === 0 ? (
+                      {filteredStockEntryLogs.length === 0 ? (
                         <tr>
                           <td colSpan={13} className="px-4 py-8 text-center text-slate-500">
-                            No stock entry logs found
+                            {stockEntryLogs.length === 0 ? 'No stock entry logs found' : 'No logs match the current filters'}
                           </td>
                         </tr>
                       ) : (
-                        stockEntryLogs.map((log) => {
+                        filteredStockEntryLogs.map((log) => {
                           const parsed = parseStockEntryNotes(log.notes);
                           return (
                             <tr
@@ -649,7 +784,11 @@ export default function StorePage() {
                                 {new Date(log.movement_date).toLocaleString()}
                               </td>
                               <td className="px-4 py-3 text-sm">
-                                <Badge className={log.movement_type === 'Store Out' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}>
+                                <Badge className={
+                                  log.movement_type === 'Store Out' || log.movement_type === 'Damage / Write-off'
+                                    ? 'bg-red-100 text-red-700'
+                                    : 'bg-green-100 text-green-700'
+                                }>
                                   {log.movement_type}
                                 </Badge>
                               </td>
@@ -664,10 +803,15 @@ export default function StorePage() {
                               <td className="px-4 py-3 text-sm text-slate-600">{log.variant_name || '-'}</td>
                               <td className="px-4 py-3 text-sm text-right text-slate-900">{log.number_of_units ?? '-'}</td>
                               <td className="px-4 py-3 text-sm text-right">
-                                <span className={`font-semibold ${log.movement_type === 'Store Out' ? 'text-red-700' : 'text-slate-900'}`}>
-                                  {log.movement_type === 'Store Out' ? '-' : ''}
-                                  {log.quantity}
-                                </span>
+                                {(() => {
+                                  const isOutflow = log.movement_type === 'Store Out' || log.movement_type === 'Damage / Write-off';
+                                  return (
+                                    <span className={`font-semibold ${isOutflow ? 'text-red-700' : 'text-slate-900'}`}>
+                                      {isOutflow ? '-' : ''}
+                                      {log.quantity}
+                                    </span>
+                                  );
+                                })()}
                                 <span className="text-slate-500 ml-1">{log.metric}</span>
                               </td>
                               <td className="px-4 py-3 text-sm text-slate-600">{parsed.poDate}</td>

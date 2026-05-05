@@ -95,6 +95,7 @@ export default function PriceVariantsTab() {
   const [batches, setBatches] = useState<BatchRow[]>([]);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
 
   // --- Create price-variant dialog ---
   const [createOpen, setCreateOpen] = useState(false);
@@ -102,9 +103,14 @@ export default function PriceVariantsTab() {
     material_id: '',
     quantity_variant_id: '',   // selected qty variant (packaging size)
     variant_name: '',          // custom label for this price tier
-    price_per_pkg: '',         // Rs. per packaging unit (e.g. per 50 kg Bag); divided by qty_per_unit before saving
+    price_per_pkg: '',         // Rs. per packaging unit, PRE-TAX
+    tax_type: '' as '' | 'CGST_SGST' | 'IGST',
+    tax_rate: '' as '' | '0' | '5' | '12' | '18',
     notes: '',
   });
+  // True once the user has manually typed in the Variant Label input —
+  // after that we stop overwriting it from auto-suggest.
+  const [variantNameEdited, setVariantNameEdited] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // --- Add stock dialog ---
@@ -124,9 +130,8 @@ export default function PriceVariantsTab() {
   const [reduceOpen, setReduceOpen] = useState(false);
   const [reduceForm, setReduceForm] = useState({
     material_id: '',
-    quantity_variant_id: '',   // '' = all packaging; otherwise qty_variant_id
-    units: '',                 // number of packaging units when MV selected
-    quantity: '',               // base-metric qty when MV not selected
+    quantity_variant_id: '',
+    units: '',
     reason: '',
   });
   const [reducing, setReducing] = useState(false);
@@ -186,8 +191,17 @@ export default function PriceVariantsTab() {
   // ─── Derived data ──────────────────────────────────────────────────────────
 
   const groupedByMaterial = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const matches = (r: VariantRow) =>
+      !q ||
+      r.material_name.toLowerCase().includes(q) ||
+      r.variant_name.toLowerCase().includes(q) ||
+      (r.quantity_variant_name ?? '').toLowerCase().includes(q);
+
+    const filteredRows = q ? rows.filter(matches) : rows;
+
     const map = new Map<number, { material_name: string; metric: string | null; variants: VariantRow[] }>();
-    for (const r of rows) {
+    for (const r of filteredRows) {
       if (!map.has(r.material_id)) {
         map.set(r.material_id, { material_name: r.material_name, metric: r.metric, variants: [] });
       }
@@ -201,7 +215,7 @@ export default function PriceVariantsTab() {
       total_qty:   v.variants.reduce((s, x) => s + Number(x.quantity_available ?? 0), 0),
       total_value: v.variants.reduce((s, x) => s + Number(x.stock_value ?? 0), 0),
     }));
-  }, [rows]);
+  }, [rows, search]);
 
   const activeVariantsByMaterial = useMemo(() => {
     const map = new Map<number, VariantRow[]>();
@@ -234,9 +248,13 @@ export default function PriceVariantsTab() {
 
   // ─── Create price variant ──────────────────────────────────────────────────
 
-  const resetCreateForm = () => setCreateForm({
-    material_id: '', quantity_variant_id: '', variant_name: '', price_per_pkg: '', notes: '',
-  });
+  const resetCreateForm = () => {
+    setCreateForm({
+      material_id: '', quantity_variant_id: '', variant_name: '', price_per_pkg: '',
+      tax_type: '', tax_rate: '', notes: '',
+    });
+    setVariantNameEdited(false);
+  };
 
   const selectedCreateMaterial = createForm.material_id
     ? materials.find((m) => m.material_id === parseInt(createForm.material_id))
@@ -259,15 +277,20 @@ export default function PriceVariantsTab() {
     if (!pricePerPkg || pricePerPkg <= 0) { toast.error('Price per packaging unit must be > 0');    return; }
     if (!selectedCreateQtyVariant)        { toast.error('Select a packaging variant to set price'); return; }
 
-    // Convert price-per-pkg → price-per-base-metric-unit for storage.
-    const unitPrice = pricePerPkg / selectedCreateQtyVariant.quantity_per_unit;
+    if (!createForm.tax_type)             { toast.error('Select tax type (CGST+SGST or IGST)');     return; }
+    if (!createForm.tax_rate)             { toast.error('Select tax rate');                          return; }
+
+    // Pre-tax per-base-metric rate. RPC will compute tax-inclusive unit_price.
+    const baseUnitPrice = pricePerPkg / selectedCreateQtyVariant.quantity_per_unit;
 
     setCreating(true);
     const { error } = await supabase.rpc('create_price_variant', {
       p_material_id:         parseInt(createForm.material_id),
       p_variant_name:        createForm.variant_name.trim(),
-      p_unit_price:          unitPrice,
+      p_base_unit_price:     baseUnitPrice,
       p_quantity_variant_id: parseInt(createForm.quantity_variant_id),
+      p_tax_type:            createForm.tax_type,
+      p_tax_rate:            parseFloat(createForm.tax_rate),
       p_notes:               createForm.notes.trim() || null,
     });
     setCreating(false);
@@ -355,35 +378,25 @@ export default function PriceVariantsTab() {
   // ─── Damage / Write-off (LIFO) ─────────────────────────────────────────────
 
   const resetReduceForm = () =>
-    setReduceForm({ material_id: '', quantity_variant_id: '', units: '', quantity: '', reason: '' });
+    setReduceForm({ material_id: '', quantity_variant_id: '', units: '', reason: '' });
 
   const handleReduce = async () => {
-    if (!reduceForm.material_id)   { toast.error('Select a material');   return; }
-    if (!reduceForm.reason.trim()) { toast.error('Reason is required');   return; }
+    if (!reduceForm.material_id)         { toast.error('Select a material');   return; }
+    if (!reduceForm.quantity_variant_id) { toast.error('Select a packaging'); return; }
+    if (!reduceForm.reason.trim())       { toast.error('Reason is required'); return; }
 
-    const qvId = reduceForm.quantity_variant_id
-      ? parseInt(reduceForm.quantity_variant_id)
-      : null;
-
-    // When a packaging is picked, input is physical units → qty = units × qpu.
-    // When not, input is raw base-metric qty.
-    let qty: number;
-    if (qvId !== null) {
-      const units = parseFloat(reduceForm.units);
-      if (!units || units <= 0) { toast.error('Units must be > 0'); return; }
-      const qpu = rows.find(r => r.quantity_variant_id === qvId && r.material_id === parseInt(reduceForm.material_id))?.quantity_per_unit ?? 1;
-      qty = units * qpu;
-    } else {
-      qty = parseFloat(reduceForm.quantity);
-      if (!qty || qty <= 0) { toast.error('Quantity must be > 0'); return; }
-    }
+    const qvId = parseInt(reduceForm.quantity_variant_id);
+    const units = parseFloat(reduceForm.units);
+    if (!units || units <= 0) { toast.error('Units must be > 0'); return; }
+    const qpu = rows.find(r => r.quantity_variant_id === qvId && r.material_id === parseInt(reduceForm.material_id))?.quantity_per_unit ?? 1;
+    const qty = units * qpu;
 
     setReducing(true);
     const { data, error } = await supabase.rpc('reduce_store_stock_lifo', {
-      p_material_id: parseInt(reduceForm.material_id),
-      p_quantity:    qty,
-      p_reason:      reduceForm.reason.trim(),
-      ...(qvId !== null && { p_qty_variant_id: qvId }),
+      p_material_id:    parseInt(reduceForm.material_id),
+      p_quantity:       qty,
+      p_reason:         reduceForm.reason.trim(),
+      p_qty_variant_id: qvId,
     });
     setReducing(false);
 
@@ -416,12 +429,18 @@ export default function PriceVariantsTab() {
   return (
     <Card className="bg-white shadow-sm">
       <CardHeader className="border-b bg-slate-50">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <CardTitle className="flex items-center gap-2">
             <Package className="h-5 w-5 text-blue-600" />
             Price Variants &amp; Stock (FIFO)
           </CardTitle>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 items-center">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search material / label / packaging"
+              className="w-[260px] bg-white"
+            />
 
             {/* ── Create Price Variant ── */}
             <Dialog
@@ -433,7 +452,7 @@ export default function PriceVariantsTab() {
                   <Plus className="h-4 w-4 mr-2" /> New Price Variant
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-white max-w-md">
+              <DialogContent className="bg-white max-w-md max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
                   <DialogTitle>Create Price Variant</DialogTitle>
                 </DialogHeader>
@@ -479,10 +498,9 @@ export default function PriceVariantsTab() {
                         setCreateForm({
                           ...createForm,
                           quantity_variant_id: v,
-                          variant_name: autoSuggestVariantName(
-                            qv?.variant_name,
-                            createForm.price_per_pkg,
-                          ),
+                          variant_name: variantNameEdited
+                            ? createForm.variant_name
+                            : autoSuggestVariantName(qv?.variant_name, createForm.price_per_pkg),
                         });
                       }}
                       disabled={!createForm.material_id}
@@ -523,10 +541,9 @@ export default function PriceVariantsTab() {
                         setCreateForm({
                           ...createForm,
                           price_per_pkg: e.target.value,
-                          variant_name: autoSuggestVariantName(
-                            selectedCreateQtyVariant?.variant_name,
-                            e.target.value,
-                          ),
+                          variant_name: variantNameEdited
+                            ? createForm.variant_name
+                            : autoSuggestVariantName(selectedCreateQtyVariant?.variant_name, e.target.value),
                         });
                       }}
                       placeholder={selectedCreateQtyVariant ? `e.g. ${selectedCreateQtyVariant.quantity_per_unit * 6}` : 'Select packaging first'}
@@ -537,13 +554,92 @@ export default function PriceVariantsTab() {
                         <p className="text-blue-700 font-medium">
                           = Rs.&nbsp;
                           {(parseFloat(createForm.price_per_pkg) / selectedCreateQtyVariant.quantity_per_unit).toFixed(4)}
-                          &nbsp;per {selectedCreateMaterial?.metric ?? 'unit'} (stored rate)
+                          &nbsp;per {selectedCreateMaterial?.metric ?? 'unit'} (pre-tax base rate)
                         </p>
                         <p className="text-slate-400">
-                          FIFO cost is calculated at this per-{selectedCreateMaterial?.metric ?? 'unit'} rate.
+                          Tax is added on top — FIFO cost uses the tax-inclusive rate.
                         </p>
                       </div>
                     )}
+                  </div>
+
+                  {/* Tax Type */}
+                  <div className="space-y-2">
+                    <Label>Tax Type *</Label>
+                    <Select
+                      value={createForm.tax_type}
+                      onValueChange={(v) => setCreateForm({
+                        ...createForm,
+                        tax_type: v as 'CGST_SGST' | 'IGST',
+                      })}
+                    >
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select tax type" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white">
+                        <SelectItem value="CGST_SGST">CGST + SGST (intra-state)</SelectItem>
+                        <SelectItem value="IGST">IGST (inter-state)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Tax Rate */}
+                  <div className="space-y-2">
+                    <Label>Tax Rate (%) *</Label>
+                    <Select
+                      value={createForm.tax_rate}
+                      onValueChange={(v) => setCreateForm({
+                        ...createForm,
+                        tax_rate: v as '0' | '5' | '12' | '18',
+                      })}
+                    >
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder="Select rate" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white">
+                        <SelectItem value="0">0%</SelectItem>
+                        <SelectItem value="5">5%</SelectItem>
+                        <SelectItem value="12">12%</SelectItem>
+                        <SelectItem value="18">18%</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {(() => {
+                      const pkg = parseFloat(createForm.price_per_pkg);
+                      const rate = parseFloat(createForm.tax_rate);
+                      if (!pkg || pkg <= 0 || !createForm.tax_type || isNaN(rate)) return null;
+                      const taxAmt = pkg * rate / 100;
+                      const total = pkg + taxAmt;
+                      const pkgLabel = selectedCreateQtyVariant?.variant_name ?? 'pkg';
+                      return (
+                        <div className="text-xs bg-amber-50 border border-amber-200 rounded p-2 space-y-0.5">
+                          <div className="flex justify-between">
+                            <span>Base (pre-tax)</span>
+                            <span className="font-medium">Rs. {pkg.toFixed(2)}/{pkgLabel}</span>
+                          </div>
+                          {createForm.tax_type === 'CGST_SGST' ? (
+                            <>
+                              <div className="flex justify-between text-amber-800">
+                                <span>CGST @ {(rate / 2).toFixed(1)}%</span>
+                                <span>Rs. {(taxAmt / 2).toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between text-amber-800">
+                                <span>SGST @ {(rate / 2).toFixed(1)}%</span>
+                                <span>Rs. {(taxAmt / 2).toFixed(2)}</span>
+                              </div>
+                            </>
+                          ) : (
+                            <div className="flex justify-between text-amber-800">
+                              <span>IGST @ {rate.toFixed(1)}%</span>
+                              <span>Rs. {taxAmt.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between border-t border-amber-200 pt-0.5 font-semibold text-amber-900">
+                            <span>Total (tax incl.)</span>
+                            <span>Rs. {total.toFixed(2)}/{pkgLabel}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Variant Name */}
@@ -551,11 +647,14 @@ export default function PriceVariantsTab() {
                     <Label>Price Variant Label *</Label>
                     <Input
                       value={createForm.variant_name}
-                      onChange={(e) => setCreateForm({ ...createForm, variant_name: e.target.value })}
+                      onChange={(e) => {
+                        setCreateForm({ ...createForm, variant_name: e.target.value });
+                        setVariantNameEdited(true);
+                      }}
                       placeholder="e.g. 50 kg Bag @ Rs.6/kg"
                     />
                     <p className="text-xs text-slate-400">
-                      Unique label for this price tier. Auto-suggested when a packaging variant is selected.
+                      Auto-suggested from packaging + price; once you edit it, your label is kept as-is.
                     </p>
                   </div>
 
@@ -604,7 +703,6 @@ export default function PriceVariantsTab() {
                         material_id: v,
                         quantity_variant_id: '',
                         units: '',
-                        quantity: '',
                       })}
                     >
                       <SelectTrigger className="bg-white">
@@ -663,21 +761,19 @@ export default function PriceVariantsTab() {
                     return (
                       <>
                         <div className="space-y-2">
-                          <Label>Packaging Variant</Label>
+                          <Label>Packaging Variant *</Label>
                           <Select
-                            value={reduceForm.quantity_variant_id || '__ALL__'}
+                            value={reduceForm.quantity_variant_id}
                             onValueChange={(v) => setReduceForm({
                               ...reduceForm,
-                              quantity_variant_id: v === '__ALL__' ? '' : v,
+                              quantity_variant_id: v,
                               units: '',
-                              quantity: '',
                             })}
                           >
                             <SelectTrigger className="bg-white">
-                              <SelectValue />
+                              <SelectValue placeholder="Select packaging" />
                             </SelectTrigger>
                             <SelectContent className="bg-white">
-                              <SelectItem value="__ALL__">All packaging (LIFO across everything)</SelectItem>
                               {pkgList.map((pv) => (
                                 <SelectItem key={pv.qty_variant_id} value={pv.qty_variant_id.toString()}>
                                   {pv.qty_variant_name} — {pv.available.toFixed(3)} {metric} available
@@ -709,20 +805,7 @@ export default function PriceVariantsTab() {
                               LIFO within this packaging: newest batches of {selectedPkg.qty_variant_name} consumed first.
                             </p>
                           </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <Label>Quantity to Reduce (in base metric) *</Label>
-                            <Input
-                              type="number" step="0.001" min="0"
-                              value={reduceForm.quantity}
-                              onChange={(e) => setReduceForm({ ...reduceForm, quantity: e.target.value })}
-                              placeholder="e.g. 5"
-                            />
-                            <p className="text-xs text-slate-500">
-                              LIFO across all packaging: newest stock consumed first, retaining older-priced inventory.
-                            </p>
-                          </div>
-                        )}
+                        ) : null}
                       </>
                     );
                   })()}
@@ -808,10 +891,9 @@ export default function PriceVariantsTab() {
                           </div>
                         ) : addStockVariantOptions.map((v) => (
                           <SelectItem key={v.variant_id} value={v.variant_id.toString()}>
-                            {v.quantity_variant_name && v.quantity_per_unit
-                              ? `${v.quantity_variant_name} — Rs. ${(Number(v.unit_price) * Number(v.quantity_per_unit)).toFixed(2)}/bag`
-                              : `${v.variant_name} (Rs. ${Number(v.unit_price).toFixed(2)})`
-                            }
+                            {v.quantity_variant_name
+                              ? `${v.quantity_variant_name} — ${v.variant_name}`
+                              : v.variant_name}
                           </SelectItem>
                         ))}
                       </SelectContent>

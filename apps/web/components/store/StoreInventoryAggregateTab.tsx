@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Package, IndianRupee } from 'lucide-react';
 
@@ -25,6 +27,8 @@ type Row = {
 export default function StoreInventoryAggregateTab() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'in_stock' | 'out_of_stock' | 'inactive'>('all');
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -40,20 +44,48 @@ export default function StoreInventoryAggregateTab() {
 
   useEffect(() => { fetchRows(); }, [fetchRows]);
 
-  const totalValue = rows.reduce((s, r) => s + Number(r.total_stock_value || 0), 0);
-  const totalMaterials = rows.filter((r) => r.total_available > 0).length;
+  const q = search.trim().toLowerCase();
+  const visibleRows = rows.filter((r) => {
+    if (q && !r.material_name.toLowerCase().includes(q)) return false;
+    if (statusFilter === 'in_stock'     && !(r.material_is_active && Number(r.total_available) > 0))  return false;
+    if (statusFilter === 'out_of_stock' && !(r.material_is_active && Number(r.total_available) <= 0)) return false;
+    if (statusFilter === 'inactive'     && r.material_is_active)                                       return false;
+    return true;
+  });
+
+  const totalValue = visibleRows.reduce((s, r) => s + Number(r.total_stock_value || 0), 0);
+  const totalMaterials = visibleRows.filter((r) => r.total_available > 0).length;
 
   return (
     <Card className="bg-white shadow-sm">
       <CardHeader className="border-b bg-slate-50">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <CardTitle className="flex items-center gap-2">
             <Package className="h-5 w-5 text-blue-600" />
             Store Inventory (Aggregated per Material)
           </CardTitle>
-          <div className="text-sm text-slate-600">
-            <span className="mr-4">{totalMaterials} material{totalMaterials === 1 ? '' : 's'} in stock</span>
-            <span>Total value: <IndianRupee className="inline h-3 w-3" />{totalValue.toFixed(2)}</span>
+          <div className="flex flex-wrap items-center gap-3">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search material"
+              className="w-[220px] bg-white"
+            />
+            <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+              <SelectTrigger className="w-[160px] bg-white">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent className="bg-white">
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="in_stock">In stock</SelectItem>
+                <SelectItem value="out_of_stock">Out of stock</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="text-sm text-slate-600">
+              <span className="mr-4">{totalMaterials} material{totalMaterials === 1 ? '' : 's'} in stock</span>
+              <span>Total value: <IndianRupee className="inline h-3 w-3" />{totalValue.toFixed(2)}</span>
+            </div>
           </div>
         </div>
         <p className="text-xs text-slate-500 mt-2">
@@ -63,7 +95,7 @@ export default function StoreInventoryAggregateTab() {
       <CardContent className="p-0">
         {loading ? (
           <div className="p-6 text-slate-500 text-sm">Loading…</div>
-        ) : rows.length === 0 ? (
+        ) : visibleRows.length === 0 ? (
           <div className="p-10 text-center text-slate-500">
             <Package className="h-10 w-10 mx-auto mb-2 text-slate-300" />
             <p className="font-medium">No materials configured.</p>
@@ -83,7 +115,7 @@ export default function StoreInventoryAggregateTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => {
+              {visibleRows.map((r) => {
                 const hasStock = Number(r.total_available) > 0;
                 const priceRange = r.min_price_in_stock == null
                   ? '—'
