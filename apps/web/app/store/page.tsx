@@ -15,6 +15,8 @@ import { Plus, Package, ClipboardList, TrendingUp, Bell, Check, X, Layers } from
 import { toast } from 'sonner';
 import PriceVariantsTab from '@/components/store/PriceVariantsTab';
 import StoreInventoryAggregateTab from '@/components/store/StoreInventoryAggregateTab';
+import InvoicesTab from '@/components/store/InvoicesTab';
+import VendorsTab from '@/components/store/VendorsTab';
 import { QUANTITY_STEP, isQuarterMultiple, parseQuarterQty } from '@/lib/quantity';
 
 interface Material {
@@ -81,6 +83,7 @@ interface StockEntryLog {
   material_id: number;
   variant_id: number | null;
   project_id: number | null;
+  vendor_id: number | null;
   movement_type: string;
   quantity: number;
   number_of_units: number | null;
@@ -92,6 +95,7 @@ interface StockEntryLog {
   metric?: string;
   project_name?: string | null;
   created_by_name?: string | null;
+  vendor_name?: string | null;
 }
 
 const STOCK_META_PREFIX = '[STOCK_META]';
@@ -227,6 +231,7 @@ export default function StorePage() {
         material_id,
         variant_id,
         project_id,
+        vendor_id,
         movement_type,
         quantity,
         number_of_units,
@@ -235,7 +240,8 @@ export default function StorePage() {
         created_by,
         materials_master!inner(material_name, metric),
         material_variants(variant_name),
-        projects(project_name)
+        projects(project_name),
+        vendors(vendor_name)
       `)
       // Store Entry Logs shows every store-side stock movement regardless of
       // source: manual adjustments, damage/write-off, MR-approval dispatches,
@@ -273,6 +279,7 @@ export default function StorePage() {
       metric: log.materials_master?.metric,
       variant_name: log.material_variants?.variant_name,
       project_name: log.projects?.project_name ?? null,
+      vendor_name: log.vendors?.vendor_name ?? null,
       created_by_name: log.created_by ? nameByUserId.get(log.created_by) ?? null : null,
     }));
 
@@ -383,6 +390,7 @@ export default function StorePage() {
           log.material_name,
           log.variant_name,
           log.project_name,
+          log.vendor_name,
           log.created_by_name,
           log.notes,
         ].filter(Boolean).join(' ').toLowerCase();
@@ -657,6 +665,8 @@ export default function StorePage() {
           <TabsList className="bg-white border">
             <TabsTrigger value="price-variants">Price Variants</TabsTrigger>
             <TabsTrigger value="inventory">Inventory</TabsTrigger>
+            <TabsTrigger value="invoices">Invoices</TabsTrigger>
+            <TabsTrigger value="vendors">Vendors</TabsTrigger>
             <TabsTrigger value="requests">Material Requests</TabsTrigger>
             <TabsTrigger value="returns">Material Returns</TabsTrigger>
             <TabsTrigger value="stock-entry-logs">Stock Entry Logs</TabsTrigger>
@@ -669,6 +679,16 @@ export default function StorePage() {
           {/* Inventory Tab (aggregated FIFO view) */}
           <TabsContent value="inventory" className="space-y-4">
             <StoreInventoryAggregateTab />
+          </TabsContent>
+
+          {/* Invoices Tab (lookup all materials entered under an invoice) */}
+          <TabsContent value="invoices" className="space-y-4">
+            <InvoicesTab />
+          </TabsContent>
+
+          {/* Vendors Tab (admin-only CRUD) */}
+          <TabsContent value="vendors" className="space-y-4">
+            <VendorsTab />
           </TabsContent>
 
           {/* Stock Entry Logs Tab */}
@@ -686,8 +706,8 @@ export default function StorePage() {
                   <Input
                     value={logSearch}
                     onChange={(e) => setLogSearch(e.target.value)}
-                    placeholder="Search material / variant / project / user"
-                    className="w-[280px] bg-white"
+                    placeholder="Search material / variant / project / vendor / user"
+                    className="w-[300px] bg-white"
                   />
                   <Input
                     value={logInvoice}
@@ -755,6 +775,7 @@ export default function StorePage() {
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Project</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Material</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Variant</th>
+                        <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">Vendor</th>
                         <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Units</th>
                         <th className="px-4 py-3 text-right text-sm font-semibold text-slate-700">Quantity</th>
                         <th className="px-4 py-3 text-left text-sm font-semibold text-slate-700">PO Date</th>
@@ -768,7 +789,7 @@ export default function StorePage() {
                     <tbody className="divide-y">
                       {filteredStockEntryLogs.length === 0 ? (
                         <tr>
-                          <td colSpan={13} className="px-4 py-8 text-center text-slate-500">
+                          <td colSpan={14} className="px-4 py-8 text-center text-slate-500">
                             {stockEntryLogs.length === 0 ? 'No stock entry logs found' : 'No logs match the current filters'}
                           </td>
                         </tr>
@@ -814,6 +835,9 @@ export default function StorePage() {
                               </td>
                               <td className="px-4 py-3 text-sm font-medium text-slate-900">{log.material_name}</td>
                               <td className="px-4 py-3 text-sm text-slate-600">{log.variant_name || '-'}</td>
+                              <td className="px-4 py-3 text-sm text-slate-700">
+                                {log.vendor_name ?? <span className="text-slate-400">—</span>}
+                              </td>
                               <td className="px-4 py-3 text-sm text-right text-slate-900">{log.number_of_units ?? '-'}</td>
                               <td className="px-4 py-3 text-sm text-right">
                                 {(() => {
@@ -881,6 +905,10 @@ export default function StorePage() {
                       <div>
                         <p className="text-slate-500">Variant</p>
                         <p className="font-medium text-slate-900">{selectedStockLog.variant_name || '-'}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Vendor</p>
+                        <p className="font-medium text-slate-900">{selectedStockLog.vendor_name || '-'}</p>
                       </div>
                       <div>
                         <p className="text-slate-500">Units</p>

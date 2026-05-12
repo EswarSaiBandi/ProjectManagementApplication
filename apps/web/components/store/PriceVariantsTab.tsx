@@ -23,6 +23,7 @@ import {
   AlertTriangle, ChevronDown, ChevronRight, Layers, Search,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import AddInvoiceDialog from './AddInvoiceDialog';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -37,6 +38,13 @@ interface QuantityVariant {
   material_id: number;
   variant_name: string;         // e.g. "50 kg Bag"
   quantity_per_unit: number;    // e.g. 50
+}
+
+interface VendorOption {
+  vendor_id: number;
+  vendor_name: string;
+  proprietor_name: string;
+  gst_number: string | null;
 }
 
 interface VariantRow {
@@ -120,6 +128,7 @@ export default function PriceVariantsTab() {
   const [addStockForm, setAddStockForm] = useState({
     material_id: '',
     variant_id: '',            // price variant id
+    vendor_id: '',             // selected vendor (required)
     number_of_units: '',       // number of bags / cans / etc.
     invoice_number: '',
     notes: '',
@@ -127,6 +136,8 @@ export default function PriceVariantsTab() {
   const [addStockFile, setAddStockFile] = useState<File | null>(null);
   const [addingStock, setAddingStock] = useState(false);
   const [addStockMaterialSearch, setAddStockMaterialSearch] = useState('');
+  const [addStockVendorSearch, setAddStockVendorSearch] = useState('');
+  const [vendors, setVendors] = useState<VendorOption[]>([]);
 
   // --- Toggle / Reduce ---
   const [togglingId, setTogglingId] = useState<number | null>(null);
@@ -144,7 +155,7 @@ export default function PriceVariantsTab() {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    const [matRes, qvRes, rowRes, batchRes] = await Promise.all([
+    const [matRes, qvRes, rowRes, batchRes, vendorRes] = await Promise.all([
       supabase
         .from('materials_master')
         .select('material_id, material_name, metric')
@@ -173,6 +184,12 @@ export default function PriceVariantsTab() {
         )
         .order('batch_date', { ascending: true })
         .order('batch_id', { ascending: true }),
+
+      supabase
+        .from('vendors')
+        .select('vendor_id, vendor_name, proprietor_name, gst_number')
+        .eq('is_active', true)
+        .order('vendor_name'),
     ]);
 
     if (matRes.error)   toast.error('Failed to load materials: '      + matRes.error.message);
@@ -186,6 +203,9 @@ export default function PriceVariantsTab() {
 
     if (batchRes.error) toast.error('Failed to load batches: '        + batchRes.error.message);
     else setBatches((batchRes.data as unknown as BatchRow[]) || []);
+
+    if (vendorRes.error) toast.error('Failed to load vendors: '       + vendorRes.error.message);
+    else setVendors((vendorRes.data as VendorOption[]) || []);
 
     setLoading(false);
   }, []);
@@ -320,10 +340,15 @@ export default function PriceVariantsTab() {
   // ─── Add stock ─────────────────────────────────────────────────────────────
 
   const resetAddStockForm = () => {
-    setAddStockForm({ material_id: '', variant_id: '', number_of_units: '', invoice_number: '', notes: '' });
+    setAddStockForm({ material_id: '', variant_id: '', vendor_id: '', number_of_units: '', invoice_number: '', notes: '' });
     setAddStockMaterialSearch('');
+    setAddStockVendorSearch('');
     setAddStockFile(null);
   };
+
+  const selectedVendor = addStockForm.vendor_id
+    ? vendors.find((v) => v.vendor_id === parseInt(addStockForm.vendor_id))
+    : null;
 
   const selectedAddStockVariant = addStockForm.variant_id
     ? rows.find((r) => r.variant_id === parseInt(addStockForm.variant_id))
@@ -341,7 +366,9 @@ export default function PriceVariantsTab() {
   }, [addStockForm.number_of_units, selectedAddStockVariant]);
 
   const handleAddStock = async () => {
-    if (!addStockForm.variant_id) { toast.error('Select a price variant'); return; }
+    if (!addStockForm.variant_id)              { toast.error('Select a price variant'); return; }
+    if (!addStockForm.vendor_id)               { toast.error('Select a vendor');        return; }
+    if (!addStockForm.invoice_number.trim())   { toast.error('Invoice number is required'); return; }
     const unitsParsed = parseQuarterQty(addStockForm.number_of_units, { label: 'Number of units' });
     if (!unitsParsed.ok) { toast.error(unitsParsed.error); return; }
     const units = unitsParsed.value;
@@ -368,8 +395,9 @@ export default function PriceVariantsTab() {
     const { error } = await supabase.rpc('add_stock_to_store', {
       p_variant_id:      parseInt(addStockForm.variant_id),
       p_number_of_units: units,
+      p_vendor_id:       parseInt(addStockForm.vendor_id),
+      p_invoice_number:  addStockForm.invoice_number.trim(),
       p_bill_path:       billPath,
-      p_invoice_number:  addStockForm.invoice_number.trim() || null,
       p_notes:           addStockForm.notes.trim() || null,
     });
     setAddingStock(false);
@@ -900,6 +928,14 @@ export default function PriceVariantsTab() {
               </DialogContent>
             </Dialog>
 
+            {/* ── Add Invoice (bulk) ── */}
+            <AddInvoiceDialog
+              materials={materials}
+              vendors={vendors}
+              rows={rows}
+              onSuccess={fetchAll}
+            />
+
             {/* ── Add Stock ── */}
             <Dialog
               open={addStockOpen}
@@ -1020,6 +1056,75 @@ export default function PriceVariantsTab() {
                     )}
                   </div>
 
+                  {/* Vendor (required) */}
+                  <div className="space-y-2">
+                    <Label>Vendor *</Label>
+                    <Select
+                      value={addStockForm.vendor_id}
+                      onValueChange={(v) => setAddStockForm({ ...addStockForm, vendor_id: v })}
+                    >
+                      <SelectTrigger className="bg-white">
+                        <SelectValue placeholder={
+                          vendors.length === 0
+                            ? 'No active vendors — create one in the Vendors tab'
+                            : 'Select vendor'
+                        } />
+                      </SelectTrigger>
+                      <SelectContent className="bg-white">
+                        <div className="sticky top-0 z-20 bg-white border-b p-2 -mx-1 -mt-1 mb-1 shadow-sm">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                            <Input
+                              autoFocus
+                              placeholder="Search vendor / proprietor / GST..."
+                              value={addStockVendorSearch}
+                              onChange={(e) => setAddStockVendorSearch(e.target.value)}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className="h-8 pl-8 bg-white"
+                            />
+                          </div>
+                        </div>
+                        {(() => {
+                          if (vendors.length === 0) {
+                            return (
+                              <div className="px-3 py-2 text-sm text-slate-500">
+                                No active vendors. Create one in the Vendors tab first.
+                              </div>
+                            );
+                          }
+                          const q = addStockVendorSearch.trim().toLowerCase();
+                          const list = vendors.filter((v) =>
+                            !q ||
+                            v.vendor_name.toLowerCase().includes(q) ||
+                            v.proprietor_name.toLowerCase().includes(q) ||
+                            (v.gst_number ?? '').toLowerCase().includes(q)
+                          );
+                          if (list.length === 0) {
+                            return (
+                              <div className="px-2 py-3 text-sm text-slate-500 text-center">
+                                No vendors match &ldquo;{addStockVendorSearch}&rdquo;
+                              </div>
+                            );
+                          }
+                          return list.map((v) => (
+                            <SelectItem key={v.vendor_id} value={v.vendor_id.toString()}>
+                              {v.vendor_name}
+                              <span className="text-slate-500"> — {v.proprietor_name}</span>
+                            </SelectItem>
+                          ));
+                        })()}
+                      </SelectContent>
+                    </Select>
+                    {selectedVendor && (
+                      <div className="text-xs bg-blue-50 border border-blue-200 rounded px-2 py-1.5 text-blue-800 space-y-0.5">
+                        <div><strong>{selectedVendor.vendor_name}</strong> — {selectedVendor.proprietor_name}</div>
+                        {selectedVendor.gst_number && (
+                          <div className="font-mono text-blue-700">GST: {selectedVendor.gst_number}</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {/* Number of units / bags */}
                   <div className="space-y-2">
                     <Label>
@@ -1068,11 +1173,12 @@ export default function PriceVariantsTab() {
 
                   {/* Invoice */}
                   <div className="space-y-2">
-                    <Label>Invoice Number</Label>
+                    <Label>Invoice Number *</Label>
                     <Input
                       value={addStockForm.invoice_number}
                       onChange={(e) => setAddStockForm({ ...addStockForm, invoice_number: e.target.value })}
                       placeholder="INV-2026-001"
+                      required
                     />
                   </div>
 
