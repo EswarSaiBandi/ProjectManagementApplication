@@ -60,6 +60,8 @@ export default function MaterialsManagementPage() {
     quantity_per_unit: ''
   });
 
+  const [variantMaterialSearch, setVariantMaterialSearch] = useState('');
+
   useEffect(() => {
     fetchMetricOptions();
     fetchMaterials();
@@ -346,6 +348,7 @@ export default function MaterialsManagementPage() {
       variant_name: '',
       quantity_per_unit: ''
     });
+    setVariantMaterialSearch('');
   };
 
   const openNewMaterial = async () => {
@@ -644,7 +647,10 @@ export default function MaterialsManagementPage() {
                   <Layers className="h-5 w-5 text-green-600" />
                   <CardTitle className="text-lg">Quantity Variants</CardTitle>
                 </div>
-                <Dialog open={isVariantDialogOpen} onOpenChange={setIsVariantDialogOpen}>
+                <Dialog
+                  open={isVariantDialogOpen}
+                  onOpenChange={(o) => { setIsVariantDialogOpen(o); if (!o) setVariantMaterialSearch(''); }}
+                >
                   <DialogTrigger asChild>
                     <Button onClick={openNewVariant} size="sm" className="bg-green-600 hover:bg-green-700">
                       <Plus className="h-4 w-4 mr-1" /> Add Variant
@@ -667,11 +673,41 @@ export default function MaterialsManagementPage() {
                             <SelectValue placeholder="Select material" />
                           </SelectTrigger>
                           <SelectContent className="bg-white">
-                            {materials.filter(m => m.is_active).map((material) => (
-                              <SelectItem key={material.material_id} value={material.material_id.toString()}>
-                                {material.material_name} ({material.metric})
-                              </SelectItem>
-                            ))}
+                            <div className="sticky top-0 z-20 bg-white border-b p-2 -mx-1 -mt-1 mb-1 shadow-sm">
+                              <div className="relative">
+                                <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                                <Input
+                                  autoFocus
+                                  placeholder="Search materials..."
+                                  value={variantMaterialSearch}
+                                  onChange={(e) => setVariantMaterialSearch(e.target.value)}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                  className="h-8 pl-8 bg-white"
+                                />
+                              </div>
+                            </div>
+                            {(() => {
+                              const q = variantMaterialSearch.trim().toLowerCase();
+                              const list = materials
+                                .filter(m => m.is_active)
+                                .filter(m =>
+                                  !q ||
+                                  m.material_name.toLowerCase().includes(q) ||
+                                  m.metric.toLowerCase().includes(q)
+                                );
+                              if (list.length === 0) {
+                                return (
+                                  <div className="px-2 py-3 text-sm text-slate-500 text-center">
+                                    No materials match &ldquo;{variantMaterialSearch}&rdquo;
+                                  </div>
+                                );
+                              }
+                              return list.map((material) => (
+                                <SelectItem key={material.material_id} value={material.material_id.toString()}>
+                                  {material.material_name} ({material.metric})
+                                </SelectItem>
+                              ));
+                            })()}
                           </SelectContent>
                         </Select>
                       </div>

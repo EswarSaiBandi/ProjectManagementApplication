@@ -134,7 +134,7 @@ create table if not exists public.material_movement_logs (
 -- Auto-generate request numbers
 create or replace function public.generate_request_number()
 returns trigger
-language plpgsql
+language plpgsql  
 as $$
 declare
   v_sequence int;

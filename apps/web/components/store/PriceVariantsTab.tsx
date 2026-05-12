@@ -20,7 +20,7 @@ import { supabase } from '@/lib/supabase';
 import { QUANTITY_STEP, parseQuarterQty } from '@/lib/quantity';
 import {
   Plus, Package, Pause, Play, Upload, IndianRupee,
-  AlertTriangle, ChevronDown, ChevronRight, Layers,
+  AlertTriangle, ChevronDown, ChevronRight, Layers, Search,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -113,6 +113,7 @@ export default function PriceVariantsTab() {
   // after that we stop overwriting it from auto-suggest.
   const [variantNameEdited, setVariantNameEdited] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [createMaterialSearch, setCreateMaterialSearch] = useState('');
 
   // --- Add stock dialog ---
   const [addStockOpen, setAddStockOpen] = useState(false);
@@ -125,6 +126,7 @@ export default function PriceVariantsTab() {
   });
   const [addStockFile, setAddStockFile] = useState<File | null>(null);
   const [addingStock, setAddingStock] = useState(false);
+  const [addStockMaterialSearch, setAddStockMaterialSearch] = useState('');
 
   // --- Toggle / Reduce ---
   const [togglingId, setTogglingId] = useState<number | null>(null);
@@ -136,6 +138,7 @@ export default function PriceVariantsTab() {
     reason: '',
   });
   const [reducing, setReducing] = useState(false);
+  const [reduceMaterialSearch, setReduceMaterialSearch] = useState('');
 
   // ─── Data fetching ─────────────────────────────────────────────────────────
 
@@ -255,6 +258,7 @@ export default function PriceVariantsTab() {
       tax_type: '', tax_rate: '', notes: '',
     });
     setVariantNameEdited(false);
+    setCreateMaterialSearch('');
   };
 
   const selectedCreateMaterial = createForm.material_id
@@ -317,6 +321,7 @@ export default function PriceVariantsTab() {
 
   const resetAddStockForm = () => {
     setAddStockForm({ material_id: '', variant_id: '', number_of_units: '', invoice_number: '', notes: '' });
+    setAddStockMaterialSearch('');
     setAddStockFile(null);
   };
 
@@ -379,8 +384,10 @@ export default function PriceVariantsTab() {
 
   // ─── Damage / Write-off (LIFO) ─────────────────────────────────────────────
 
-  const resetReduceForm = () =>
+  const resetReduceForm = () => {
     setReduceForm({ material_id: '', quantity_variant_id: '', units: '', reason: '' });
+    setReduceMaterialSearch('');
+  };
 
   const handleReduce = async () => {
     if (!reduceForm.material_id)         { toast.error('Select a material');   return; }
@@ -477,11 +484,39 @@ export default function PriceVariantsTab() {
                         <SelectValue placeholder="Select material" />
                       </SelectTrigger>
                       <SelectContent className="bg-white">
-                        {materials.map((m) => (
-                          <SelectItem key={m.material_id} value={m.material_id.toString()}>
-                            {m.material_name} ({m.metric})
-                          </SelectItem>
-                        ))}
+                        <div className="sticky top-0 z-20 bg-white border-b p-2 -mx-1 -mt-1 mb-1 shadow-sm">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                            <Input
+                              autoFocus
+                              placeholder="Search materials..."
+                              value={createMaterialSearch}
+                              onChange={(e) => setCreateMaterialSearch(e.target.value)}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className="h-8 pl-8 bg-white"
+                            />
+                          </div>
+                        </div>
+                        {(() => {
+                          const q = createMaterialSearch.trim().toLowerCase();
+                          const list = materials.filter((m) =>
+                            !q ||
+                            m.material_name.toLowerCase().includes(q) ||
+                            (m.metric ?? '').toLowerCase().includes(q)
+                          );
+                          if (list.length === 0) {
+                            return (
+                              <div className="px-2 py-3 text-sm text-slate-500 text-center">
+                                No materials match &ldquo;{createMaterialSearch}&rdquo;
+                              </div>
+                            );
+                          }
+                          return list.map((m) => (
+                            <SelectItem key={m.material_id} value={m.material_id.toString()}>
+                              {m.material_name} ({m.metric})
+                            </SelectItem>
+                          ));
+                        })()}
                       </SelectContent>
                     </Select>
                   </div>
@@ -712,15 +747,46 @@ export default function PriceVariantsTab() {
                         <SelectValue placeholder="Select material" />
                       </SelectTrigger>
                       <SelectContent className="bg-white">
-                        {materialsWithStock.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-slate-500">
-                            No materials with stock available.
+                        <div className="sticky top-0 z-20 bg-white border-b p-2 -mx-1 -mt-1 mb-1 shadow-sm">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                            <Input
+                              autoFocus
+                              placeholder="Search materials..."
+                              value={reduceMaterialSearch}
+                              onChange={(e) => setReduceMaterialSearch(e.target.value)}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className="h-8 pl-8 bg-white"
+                            />
                           </div>
-                        ) : materialsWithStock.map((m) => (
-                          <SelectItem key={m.material_id} value={m.material_id.toString()}>
-                            {m.material_name} — {m.available.toFixed(3)} {m.metric} available
-                          </SelectItem>
-                        ))}
+                        </div>
+                        {(() => {
+                          if (materialsWithStock.length === 0) {
+                            return (
+                              <div className="px-3 py-2 text-sm text-slate-500">
+                                No materials with stock available.
+                              </div>
+                            );
+                          }
+                          const q = reduceMaterialSearch.trim().toLowerCase();
+                          const list = materialsWithStock.filter((m) =>
+                            !q ||
+                            m.material_name.toLowerCase().includes(q) ||
+                            (m.metric ?? '').toLowerCase().includes(q)
+                          );
+                          if (list.length === 0) {
+                            return (
+                              <div className="px-2 py-3 text-sm text-slate-500 text-center">
+                                No materials match &ldquo;{reduceMaterialSearch}&rdquo;
+                              </div>
+                            );
+                          }
+                          return list.map((m) => (
+                            <SelectItem key={m.material_id} value={m.material_id.toString()}>
+                              {m.material_name} — {m.available.toFixed(3)} {m.metric} available
+                            </SelectItem>
+                          ));
+                        })()}
                       </SelectContent>
                     </Select>
                   </div>
@@ -863,11 +929,39 @@ export default function PriceVariantsTab() {
                         <SelectValue placeholder="Select material" />
                       </SelectTrigger>
                       <SelectContent className="bg-white">
-                        {materials.map((m) => (
-                          <SelectItem key={m.material_id} value={m.material_id.toString()}>
-                            {m.material_name} ({m.metric})
-                          </SelectItem>
-                        ))}
+                        <div className="sticky top-0 z-20 bg-white border-b p-2 -mx-1 -mt-1 mb-1 shadow-sm">
+                          <div className="relative">
+                            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                            <Input
+                              autoFocus
+                              placeholder="Search materials..."
+                              value={addStockMaterialSearch}
+                              onChange={(e) => setAddStockMaterialSearch(e.target.value)}
+                              onKeyDown={(e) => e.stopPropagation()}
+                              className="h-8 pl-8 bg-white"
+                            />
+                          </div>
+                        </div>
+                        {(() => {
+                          const q = addStockMaterialSearch.trim().toLowerCase();
+                          const list = materials.filter((m) =>
+                            !q ||
+                            m.material_name.toLowerCase().includes(q) ||
+                            (m.metric ?? '').toLowerCase().includes(q)
+                          );
+                          if (list.length === 0) {
+                            return (
+                              <div className="px-2 py-3 text-sm text-slate-500 text-center">
+                                No materials match &ldquo;{addStockMaterialSearch}&rdquo;
+                              </div>
+                            );
+                          }
+                          return list.map((m) => (
+                            <SelectItem key={m.material_id} value={m.material_id.toString()}>
+                              {m.material_name} ({m.metric})
+                            </SelectItem>
+                          ));
+                        })()}
                       </SelectContent>
                     </Select>
                   </div>
