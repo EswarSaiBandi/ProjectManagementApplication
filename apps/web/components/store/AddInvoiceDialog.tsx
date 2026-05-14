@@ -247,13 +247,15 @@ export default function AddInvoiceDialog({ materials, vendors, rows, onSuccess }
       billPath = path;
     }
 
-    // 2. Build items array
-    const items = lines.map((ln) => ({
-      variant_id:      parseInt(ln.variant_id),
-      number_of_units: parseQuarterQty(ln.number_of_units, { label: 'units' }).ok
-        ? parseQuarterQty(ln.number_of_units, { label: 'units' }).value
-        : 0,
-    }));
+    // 2. Build items array. validateForSubmit above already guaranteed every
+    //    line parses cleanly, so we can assert .ok here.
+    const items = lines.map((ln) => {
+      const parsed = parseQuarterQty(ln.number_of_units, { label: 'units' });
+      return {
+        variant_id:      parseInt(ln.variant_id),
+        number_of_units: parsed.ok ? parsed.value : 0,
+      };
+    });
 
     // 3. Call RPC
     const { data, error } = await supabase.rpc('add_stock_bulk', {
