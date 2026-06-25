@@ -32,6 +32,7 @@ const FIELD_TYPES = [
   { value: 'project_type', label: 'Project Types' },
   { value: 'material_category', label: 'Material Metrics' },
   { value: 'task_priority', label: 'Task Priorities' },
+  { value: 'activity_master', label: 'Activity Master List' },
 ];
 
 export default function DynamicFieldsManager() {
@@ -40,6 +41,7 @@ export default function DynamicFieldsManager() {
   const [loading, setLoading] = useState(false);
   const [newOption, setNewOption] = useState('');
   const [newColor, setNewColor] = useState('');
+  const [newTag, setNewTag] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   const fetchOptions = async (fieldType: string) => {
@@ -86,6 +88,7 @@ export default function DynamicFieldsManager() {
         .update({
           is_active: true,
           color_code: activeFieldType === 'cost_category' ? (newColor.trim() || existing.color_code) : existing.color_code,
+          description: activeFieldType === 'activity_master' ? (newTag.trim() || existing.description) : existing.description,
         })
         .eq('option_id', existing.option_id);
 
@@ -99,6 +102,7 @@ export default function DynamicFieldsManager() {
       toast.success('Option reactivated');
       setNewOption('');
       setNewColor('');
+      setNewTag('');
       await fetchOptions(activeFieldType);
       setIsSaving(false);
       return;
@@ -112,6 +116,7 @@ export default function DynamicFieldsManager() {
       display_order: maxOrder + 1,
       is_active: true,
       color_code: newColor.trim() || null,
+      description: activeFieldType === 'activity_master' ? (newTag.trim() || null) : null,
       created_by: userData.user?.id,
     };
 
@@ -127,6 +132,7 @@ export default function DynamicFieldsManager() {
     toast.success('Option added');
     setNewOption('');
     setNewColor('');
+    setNewTag('');
     await fetchOptions(activeFieldType);
     setIsSaving(false);
   };
@@ -184,7 +190,7 @@ export default function DynamicFieldsManager() {
           <CardContent className="pt-4">
             <div className="flex gap-3 items-end">
               <div className="flex-1 space-y-2">
-                <Label>New Option Value</Label>
+                <Label>{activeFieldType === 'activity_master' ? 'Activity Name' : 'New Option Value'}</Label>
                 <Input
                   value={newOption}
                   onChange={(e) => setNewOption(e.target.value)}
@@ -195,12 +201,25 @@ export default function DynamicFieldsManager() {
                       ? 'Transportation'
                       : activeFieldType === 'project_expense_type'
                       ? 'Accommodation'
+                      : activeFieldType === 'activity_master'
+                      ? 'Polishing'
                       : 'New Option'
                   }`}
                   className="bg-white"
                   onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
                 />
               </div>
+              {activeFieldType === 'activity_master' && (
+                <div className="w-[180px] space-y-2">
+                  <Label>Tag (optional)</Label>
+                  <Input
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    placeholder="e.g. Civil / MEP"
+                    className="bg-white"
+                  />
+                </div>
+              )}
               {activeFieldType === 'cost_category' && (
                 <div className="w-[140px] space-y-2">
                   <Label>Color (optional)</Label>
@@ -243,6 +262,7 @@ export default function DynamicFieldsManager() {
                   <TableHead className="w-[60px]">Order</TableHead>
                   <TableHead>Option Value</TableHead>
                   {activeFieldType === 'cost_category' && <TableHead className="w-[100px]">Color</TableHead>}
+                  {activeFieldType === 'activity_master' && <TableHead className="w-[140px]">Tag</TableHead>}
                   <TableHead className="w-[180px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -255,7 +275,7 @@ export default function DynamicFieldsManager() {
                       <TableCell>
                         {option.color_code ? (
                           <div className="flex items-center gap-2">
-                            <div 
+                            <div
                               className="w-6 h-6 rounded border"
                               style={{ backgroundColor: option.color_code }}
                             />
@@ -263,6 +283,15 @@ export default function DynamicFieldsManager() {
                           </div>
                         ) : (
                           <span className="text-xs text-slate-400">No color</span>
+                        )}
+                      </TableCell>
+                    )}
+                    {activeFieldType === 'activity_master' && (
+                      <TableCell>
+                        {option.description ? (
+                          <Badge variant="outline" className="text-xs">{option.description}</Badge>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
                         )}
                       </TableCell>
                     )}

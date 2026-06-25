@@ -38,7 +38,10 @@ type Activity = {
 
 const STATUS_OPTIONS = ["Pending", "In Progress", "Completed"] as const;
 
-const MASTER_ACTIVITIES = [
+type MasterActivity = { name: string; tag: string };
+
+// Fallback used only if Settings > Activity Master List has no active entries yet.
+const FALLBACK_MASTER_ACTIVITIES: MasterActivity[] = [
     { name: "Snags", tag: "Site Work" },
     { name: "Plumbing Drawing", tag: "Design" },
     { name: "Flooring", tag: "Civil" },
@@ -69,6 +72,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
     const [currentUser, setCurrentUser] = useState("Unknown");
     const [teamNames, setTeamNames] = useState<string[]>([]);
     const [createMode, setCreateMode] = useState<"bulk" | "custom">("bulk");
+    const [masterActivities, setMasterActivities] = useState<MasterActivity[]>(FALLBACK_MASTER_ACTIVITIES);
 
     // NEW: View Toggle State
     const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
@@ -84,6 +88,28 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
             }
         };
         fetchUser();
+    }, []);
+
+    useEffect(() => {
+        const fetchMasterActivities = async () => {
+            const { data, error } = await supabase
+                .from('dynamic_field_options')
+                .select('option_value, description, display_order, is_active')
+                .eq('field_type', 'activity_master')
+                .eq('is_active', true)
+                .order('display_order');
+            if (error || !data || data.length === 0) {
+                setMasterActivities(FALLBACK_MASTER_ACTIVITIES);
+                return;
+            }
+            setMasterActivities(
+                data.map((r: any) => ({
+                    name: String(r.option_value || '').trim(),
+                    tag: String(r.description || '').trim() || 'Site Work',
+                })).filter(m => m.name)
+            );
+        };
+        fetchMasterActivities();
     }, []);
 
     useEffect(() => {
@@ -342,7 +368,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
                 }
 
                 const bulkPayload = selectedActivities.map(activityName => {
-                    const masterItem = MASTER_ACTIVITIES.find(m => m.name === activityName);
+                    const masterItem = masterActivities.find(m => m.name === activityName);
                     return {
                         project_id: Number(projectId),
                         activity_name: activityName,
@@ -398,7 +424,7 @@ export default function ActivitiesTab({ projectId, readOnly = false }: { project
         });
     };
 
-    const filteredMasterList = MASTER_ACTIVITIES.filter(item =>
+    const filteredMasterList = masterActivities.filter(item =>
         item.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
 

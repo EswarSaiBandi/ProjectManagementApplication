@@ -13,10 +13,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
-import { 
-  Calculator, Plus, TrendingUp, TrendingDown, DollarSign, 
+import {
+  Calculator, Plus, TrendingUp, TrendingDown, DollarSign,
   AlertCircle, CheckCircle, Package, Users, UserCheck, Building2,
-  Pencil, Trash2
+  Pencil, Trash2, Banknote, Wallet
 } from 'lucide-react';
 
 type CostSummary = {
@@ -45,6 +45,7 @@ type BudgetEntry = {
 
 type ManpowerCostRow = {
   id: number;
+  labour_id: number | null;
   labour_type: 'In-House' | 'Outsourced';
   start_date: string | null;
   end_date: string | null;
@@ -52,6 +53,16 @@ type ManpowerCostRow = {
   daily_wage: number | null;
   incentive: number | null;
   labour: { name: string; designation: string | null; monthly_salary: number | null } | null;
+};
+
+type ManpowerPaymentRow = {
+  payment_id: number;
+  labour_id: number;
+  project_id: number | null;
+  amount: number;
+  payment_date: string;
+  notes: string | null;
+  created_at: string;
 };
 
 // material_cost_actual is sourced directly from the project_costing_summary
@@ -83,6 +94,20 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const [costSummary, setCostSummary] = useState<CostSummary | null>(null);
   const [ledgerEntries, setLedgerEntries] = useState<BudgetEntry[]>([]);
   const [manpowerRows, setManpowerRows] = useState<ManpowerCostRow[]>([]);
+  const [manpowerPayments, setManpowerPayments] = useState<ManpowerPaymentRow[]>([]);
+
+  // Record-advance dialog
+  const [isAdvanceOpen, setIsAdvanceOpen] = useState(false);
+  const [isSavingAdvance, setIsSavingAdvance] = useState(false);
+  const [advanceForm, setAdvanceForm] = useState({
+    labour_id: '',
+    amount: '',
+    payment_date: new Date().toISOString().split('T')[0],
+    notes: '',
+  });
+
+  // Per-labour payment history dialog
+  const [historyLabourId, setHistoryLabourId] = useState<number | null>(null);
   const [costCategories, setCostCategories] = useState<string[]>([]);
   const [expenseTypeOptions, setExpenseTypeOptions] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,6 +140,16 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     () => ledgerEntries.filter((e) => e.cost_type === 'Actual'),
     [ledgerEntries]
   );
+  const expenseTotalsByType = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const e of expenseRows) {
+      const key = e.cost_category || 'Other';
+      map.set(key, (map.get(key) ?? 0) + Number(e.amount));
+    }
+    return Array.from(map.entries())
+      .map(([type, total]) => ({ type, total }))
+      .sort((a, b) => b.total - a.total);
+  }, [expenseRows]);
   const budgetCategoryOptions = useMemo(() => {
     const skip = new Set<string>(expenseTypeOptions);
     const base = costCategories.filter((c) => !skip.has(c));
@@ -211,6 +246,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
 
     setManpowerRows(pmRows.map((r: any) => ({
       id: r.id,
+      labour_id: r.labour_id ?? null,
       labour_type: r.labour_type ?? r.labor_type ?? 'In-House',
       start_date: r.start_date,
       end_date: r.end_date,
@@ -221,12 +257,23 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
     })));
   };
 
+  const fetchManpowerPayments = async () => {
+    if (!Number.isFinite(numericProjectId)) return;
+    const { data, error } = await supabase
+      .from('manpower_payments')
+      .select('payment_id, labour_id, project_id, amount, payment_date, notes, created_at')
+      .eq('project_id', numericProjectId)
+      .order('payment_date', { ascending: false });
+    if (!error && data) setManpowerPayments(data as ManpowerPaymentRow[]);
+  };
+
   useEffect(() => {
     fetchCostingSummary();
     fetchLedgerEntries();
     fetchCostCategories();
     fetchExpenseTypeOptions();
     fetchManpowerCosts();
+    fetchManpowerPayments();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numericProjectId]);
 
@@ -434,6 +481,113 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
   const profitMarginPercent = costSummary?.budgeted_total
     ? ((displayedProfitLoss / costSummary.budgeted_total) * 100).toFixed(1)
     : '0';
+
+  /* ── Per-worker advance/balance rollup ──────────────────────────── */
+  type WorkerBalance = {
+    labour_id: number;
+    name: string;
+    designation: string | null;
+    labour_type: 'In-House' | 'Outsourced';
+    estCost: number;
+    paid: number;
+    balance: number;
+    lastPaidOn: string | null;
+  };
+
+  const workerBalances: WorkerBalance[] = useMemo(() => {
+    const byLabour = new Map<number, WorkerBalance>();
+
+    for (const r of manpowerRows) {
+      if (!r.labour_id) continue;
+      const cost = calcManpowerCost(r);
+      const existing = byLabour.get(r.labour_id);
+      if (existing) {
+        existing.estCost += cost;
+      } else {
+        byLabour.set(r.labour_id, {
+          labour_id: r.labour_id,
+          name: r.labour?.name ?? '—',
+          designation: r.labour?.designation ?? null,
+          labour_type: r.labour_type,
+          estCost: cost,
+          paid: 0,
+          balance: 0,
+          lastPaidOn: null,
+        });
+      }
+    }
+
+    for (const p of manpowerPayments) {
+      const wb = byLabour.get(p.labour_id);
+      if (!wb) continue;
+      wb.paid += Number(p.amount) || 0;
+      if (!wb.lastPaidOn || p.payment_date > wb.lastPaidOn) wb.lastPaidOn = p.payment_date;
+    }
+
+    return Array.from(byLabour.values())
+      .map(w => ({ ...w, balance: w.estCost - w.paid }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [manpowerRows, manpowerPayments]);
+
+  const totalEstimated = workerBalances.reduce((s, w) => s + w.estCost, 0);
+  const totalPaid      = workerBalances.reduce((s, w) => s + w.paid, 0);
+  const totalBalance   = totalEstimated - totalPaid;
+
+  const openAdvance = (labourId?: number) => {
+    setAdvanceForm({
+      labour_id: labourId ? String(labourId) : '',
+      amount: '',
+      payment_date: new Date().toISOString().split('T')[0],
+      notes: '',
+    });
+    setIsAdvanceOpen(true);
+  };
+
+  const handleSaveAdvance = async () => {
+    if (isSavingAdvance) return;
+    if (!advanceForm.labour_id) { toast.error('Select a worker'); return; }
+    const amount = Number(advanceForm.amount);
+    if (!amount || amount <= 0) { toast.error('Amount must be greater than 0'); return; }
+    if (!advanceForm.payment_date) { toast.error('Payment date is required'); return; }
+
+    setIsSavingAdvance(true);
+    const { data: userData } = await supabase.auth.getUser();
+    const userId = userData.user?.id ?? null;
+
+    const { error } = await supabase.from('manpower_payments').insert([{
+      labour_id: Number(advanceForm.labour_id),
+      project_id: numericProjectId,
+      amount,
+      payment_date: advanceForm.payment_date,
+      notes: advanceForm.notes.trim() || null,
+      created_by: userId,
+    }]);
+
+    if (error) { toast.error(error.message || 'Failed to record advance'); setIsSavingAdvance(false); return; }
+    toast.success('Advance recorded');
+    setIsAdvanceOpen(false);
+    await fetchManpowerPayments();
+    setIsSavingAdvance(false);
+  };
+
+  const handleDeletePayment = async (paymentId: number, amount: number) => {
+    if (!confirm(`Delete advance of ${fmt(amount)}?`)) return;
+    const { error } = await supabase.from('manpower_payments').delete().eq('payment_id', paymentId);
+    if (error) { toast.error(error.message); return; }
+    toast.success('Advance deleted');
+    await fetchManpowerPayments();
+  };
+
+  const historyPayments = useMemo(() => {
+    if (historyLabourId == null) return [];
+    return manpowerPayments
+      .filter(p => p.labour_id === historyLabourId)
+      .sort((a, b) => b.payment_date.localeCompare(a.payment_date));
+  }, [manpowerPayments, historyLabourId]);
+  const historyLabourName = useMemo(() => {
+    if (historyLabourId == null) return '';
+    return workerBalances.find(w => w.labour_id === historyLabourId)?.name ?? '';
+  }, [historyLabourId, workerBalances]);
 
   return (
     <div className="space-y-4">
@@ -648,6 +802,95 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                 <div className="text-sm font-medium text-purple-800">Total manpower cost (in-house + outsourced)</div>
                 <div className="text-lg font-bold text-purple-700">{fmt(clientTotalLabour)}</div>
               </div>
+
+              {/* Advances & Balance per worker */}
+              {workerBalances.length > 0 && (
+                <div className="mt-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Wallet className="h-4 w-4 text-emerald-600" />
+                    <span className="font-semibold text-sm text-emerald-700">Advances & Balance</span>
+                    <span className="text-xs text-slate-500">— weekly advances recorded against each worker</span>
+                    <Button
+                      size="sm"
+                      onClick={() => openAdvance()}
+                      className="ml-auto bg-emerald-600 text-white hover:bg-emerald-700 h-8"
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" /> Record advance
+                    </Button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table className="min-w-[720px]">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="min-w-[140px]">Worker</TableHead>
+                          <TableHead className="min-w-[100px]">Designation</TableHead>
+                          <TableHead className="text-right">Est. Cost</TableHead>
+                          <TableHead className="text-right">Paid</TableHead>
+                          <TableHead className="text-right">Balance</TableHead>
+                          <TableHead className="text-center">Last paid on</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {workerBalances.map(w => (
+                          <TableRow key={w.labour_id} className="hover:bg-slate-50">
+                            <TableCell className="font-medium text-sm">{w.name}</TableCell>
+                            <TableCell className="text-slate-600 text-xs">{w.designation || '—'}</TableCell>
+                            <TableCell className="text-right text-sm">{w.estCost > 0 ? fmt(w.estCost) : '—'}</TableCell>
+                            <TableCell className="text-right text-sm text-emerald-700 font-medium">{w.paid > 0 ? fmt(w.paid) : '—'}</TableCell>
+                            <TableCell className={`text-right text-sm font-semibold ${w.balance > 0.5 ? 'text-orange-600' : w.balance < -0.5 ? 'text-red-600' : 'text-emerald-700'}`}>
+                              {w.balance > 0.5
+                                ? fmt(w.balance)
+                                : w.balance < -0.5
+                                  ? `-${fmt(Math.abs(w.balance))}`
+                                  : '₹0'}
+                            </TableCell>
+                            <TableCell className="text-center text-xs text-slate-600">
+                              {w.lastPaidOn ? new Date(w.lastPaidOn).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openAdvance(w.labour_id)}
+                                  title="Record advance"
+                                  className="h-7 text-xs border-emerald-600 text-emerald-700 hover:bg-emerald-50"
+                                >
+                                  <Plus className="h-3 w-3 mr-1" /> Advance
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setHistoryLabourId(w.labour_id)}
+                                  title="View payment history"
+                                  className="h-7 text-xs"
+                                  disabled={w.paid === 0}
+                                >
+                                  <Banknote className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                        <TableRow className="bg-emerald-50/80 font-semibold border-t-2">
+                          <TableCell colSpan={2} className="text-right text-sm">Totals</TableCell>
+                          <TableCell className="text-right text-purple-700">{fmt(totalEstimated)}</TableCell>
+                          <TableCell className="text-right text-emerald-700">{fmt(totalPaid)}</TableCell>
+                          <TableCell className={`text-right ${totalBalance > 0.5 ? 'text-orange-700' : totalBalance < -0.5 ? 'text-red-700' : 'text-emerald-700'}`}>
+                            {totalBalance > 0.5
+                              ? fmt(totalBalance)
+                              : totalBalance < -0.5
+                                ? `-${fmt(Math.abs(totalBalance))}`
+                                : '₹0'}
+                          </TableCell>
+                          <TableCell colSpan={2} />
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
               {clientTotalLabour > 0 && costSummary?.budgeted_total && costSummary.budgeted_total > 0 && (
                 <div className="space-y-1">
                   <div className="flex justify-between text-xs text-muted-foreground">
@@ -900,6 +1143,23 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
               No project expenses recorded yet.
             </div>
           ) : (
+            <>
+              {/* Per-type expense totals */}
+              {expenseTotalsByType.length > 0 && (
+                <div className="mb-4 flex flex-wrap gap-2">
+                  {expenseTotalsByType.map(({ type, total }) => (
+                    <div
+                      key={type}
+                      className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50/60 px-3 py-1.5"
+                    >
+                      <Badge className="bg-emerald-600/10 text-emerald-800 border-emerald-200 text-xs">{type}</Badge>
+                      <span className="text-sm font-semibold text-emerald-800">
+                        ₹{Math.round(total).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
             <Table className="min-w-[580px]">
               <TableHeader>
                 <TableRow>
@@ -949,6 +1209,7 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
                 </TableRow>
               </TableBody>
             </Table>
+            </>
           )}
         </CardContent>
       </Card>
@@ -1079,6 +1340,127 @@ export default function ProjectCostingTab({ projectId }: { projectId: string }) 
           </CardContent>
         </Card>
       )}
+
+      {/* Record advance dialog */}
+      <Dialog open={isAdvanceOpen} onOpenChange={setIsAdvanceOpen}>
+        <DialogContent className="bg-white max-w-md">
+          <DialogHeader>
+            <DialogTitle>Record manpower advance</DialogTitle>
+            <DialogDescription>
+              Log an advance/weekly payment for a worker on this project. Date is mandatory.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label>Worker *</Label>
+              <Select
+                value={advanceForm.labour_id || '__none__'}
+                onValueChange={(v) => setAdvanceForm({ ...advanceForm, labour_id: v === '__none__' ? '' : v })}
+              >
+                <SelectTrigger className="bg-white">
+                  <SelectValue placeholder="Select worker..." />
+                </SelectTrigger>
+                <SelectContent className="bg-white max-h-60">
+                  <SelectItem value="__none__">— Select —</SelectItem>
+                  {workerBalances.map(w => (
+                    <SelectItem key={w.labour_id} value={String(w.labour_id)}>
+                      {w.name}{w.designation ? ` · ${w.designation}` : ''} (Balance: {fmt(Math.max(w.balance, 0))})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Amount (₹) *</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={advanceForm.amount}
+                  onChange={(e) => setAdvanceForm({ ...advanceForm, amount: e.target.value })}
+                  className="bg-white"
+                  placeholder="e.g. 5000"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Payment Date *</Label>
+                <Input
+                  type="date"
+                  value={advanceForm.payment_date}
+                  onChange={(e) => setAdvanceForm({ ...advanceForm, payment_date: e.target.value })}
+                  className="bg-white"
+                  required
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes</Label>
+              <Textarea
+                value={advanceForm.notes}
+                onChange={(e) => setAdvanceForm({ ...advanceForm, notes: e.target.value })}
+                rows={2}
+                className="bg-white"
+                placeholder="e.g. UPI advance, Week of 22-Jun"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsAdvanceOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveAdvance} disabled={isSavingAdvance} className="bg-emerald-600 text-white hover:bg-emerald-700">
+              {isSavingAdvance ? 'Saving...' : 'Save advance'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payment history dialog */}
+      <Dialog open={historyLabourId != null} onOpenChange={(o) => { if (!o) setHistoryLabourId(null); }}>
+        <DialogContent className="bg-white max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Advance history — {historyLabourName}</DialogTitle>
+            <DialogDescription>All advances recorded for this worker on this project.</DialogDescription>
+          </DialogHeader>
+          {historyPayments.length === 0 ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">No advances yet.</div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[110px]">Date</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Notes</TableHead>
+                  <TableHead className="w-[60px] text-right">·</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {historyPayments.map(p => (
+                  <TableRow key={p.payment_id} className="hover:bg-slate-50">
+                    <TableCell className="text-xs">
+                      {new Date(p.payment_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                    </TableCell>
+                    <TableCell className="text-right text-sm font-semibold text-emerald-700">{fmt(Number(p.amount))}</TableCell>
+                    <TableCell className="text-xs text-slate-600">{p.notes || '—'}</TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDeletePayment(p.payment_id, Number(p.amount))}
+                        className="h-7 text-red-500 hover:bg-red-50 hover:text-red-600"
+                        title="Delete advance"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHistoryLabourId(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Cost Tracking Info */}
       <Card className="bg-blue-50 border-blue-200">

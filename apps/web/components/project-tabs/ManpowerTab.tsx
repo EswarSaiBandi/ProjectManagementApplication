@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Users, Plus, Pencil, Trash, Building2, UserCheck, DollarSign, Info } from 'lucide-react';
+import { Users, Plus, Pencil, Trash, Building2, UserCheck, DollarSign, Info, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
 /* ─── Types ─────────────────────────────────────────────────────────── */
@@ -70,6 +70,23 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
 
   const [activeTab, setActiveTab] = useState<'in-house' | 'outsourced'>('in-house');
   const [rows, setRows] = useState<ManpowerRow[]>([]);
+
+  /* ── Sorting ── */
+  type SortDir = 'asc' | 'desc';
+  type InHouseSortKey   = 'name' | 'designation' | 'notes' | 'bandwidth' | 'start_date' | 'days' | 'rate' | 'cost';
+  type OutsourceSortKey = 'name' | 'designation' | 'notes' | 'start_date' | 'days' | 'daily_wage' | 'incentive' | 'cost';
+  const [inHouseSort,   setInHouseSort]   = useState<{ key: InHouseSortKey;   dir: SortDir }>({ key: 'start_date', dir: 'desc' });
+  const [outsourceSort, setOutsourceSort] = useState<{ key: OutsourceSortKey; dir: SortDir }>({ key: 'start_date', dir: 'desc' });
+
+  const toggleInHouseSort = (key: InHouseSortKey) =>
+    setInHouseSort(s => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+  const toggleOutsourceSort = (key: OutsourceSortKey) =>
+    setOutsourceSort(s => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
+
+  const SortIcon = ({ active, dir }: { active: boolean; dir: SortDir }) =>
+    !active ? <ArrowUpDown className="h-3 w-3 opacity-40" />
+    : dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
+
   const [labourMaster, setLabourMaster] = useState<LabourMaster[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
@@ -96,6 +113,8 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
       .from('project_manpower')
       .select('*')
       .eq('project_id', numericProjectId)
+      .order('start_date', { ascending: false, nullsFirst: false })
+      .order('end_date', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false });
 
     if (error) { toast.error('Failed to load: ' + error.message); setLoading(false); return; }
@@ -139,8 +158,86 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
   useEffect(() => { fetchRows(); fetchLabourMaster(); }, [numericProjectId]);
 
   /* ── Derived ── */
-  const inHouseRows    = rows.filter(r => r.labour_type === 'In-House');
-  const outsourcedRows = rows.filter(r => r.labour_type === 'Outsourced');
+  const inHouseRowsRaw    = rows.filter(r => r.labour_type === 'In-House');
+  const outsourcedRowsRaw = rows.filter(r => r.labour_type === 'Outsourced');
+
+  const cmp = (a: any, b: any) => {
+    const aNull = a === null || a === undefined || a === '';
+    const bNull = b === null || b === undefined || b === '';
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+  };
+
+  const inHouseRows = useMemo(() => {
+    const rowsCopy = [...inHouseRowsRaw];
+    const { key, dir } = inHouseSort;
+    rowsCopy.sort((a, b) => {
+      const va = (() => {
+        switch (key) {
+          case 'name':        return a.labour?.name ?? '';
+          case 'designation': return a.labour?.designation ?? '';
+          case 'notes':       return a.notes ?? '';
+          case 'bandwidth':   return a.bandwidth_pct ?? 0;
+          case 'start_date':  return a.start_date ?? '';
+          case 'days':        return a.start_date && a.end_date ? workingDays(a.start_date, a.end_date) : 0;
+          case 'rate':        return (a.labour?.monthly_salary ?? 0) / 24 * ((a.bandwidth_pct ?? 0) / 100);
+          case 'cost':        return calcCost(a) ?? 0;
+        }
+      })();
+      const vb = (() => {
+        switch (key) {
+          case 'name':        return b.labour?.name ?? '';
+          case 'designation': return b.labour?.designation ?? '';
+          case 'notes':       return b.notes ?? '';
+          case 'bandwidth':   return b.bandwidth_pct ?? 0;
+          case 'start_date':  return b.start_date ?? '';
+          case 'days':        return b.start_date && b.end_date ? workingDays(b.start_date, b.end_date) : 0;
+          case 'rate':        return (b.labour?.monthly_salary ?? 0) / 24 * ((b.bandwidth_pct ?? 0) / 100);
+          case 'cost':        return calcCost(b) ?? 0;
+        }
+      })();
+      const result = cmp(va, vb);
+      return dir === 'asc' ? result : -result;
+    });
+    return rowsCopy;
+  }, [inHouseRowsRaw, inHouseSort]);
+
+  const outsourcedRows = useMemo(() => {
+    const rowsCopy = [...outsourcedRowsRaw];
+    const { key, dir } = outsourceSort;
+    rowsCopy.sort((a, b) => {
+      const va = (() => {
+        switch (key) {
+          case 'name':        return a.labour?.name ?? '';
+          case 'designation': return a.labour?.designation ?? '';
+          case 'notes':       return a.notes ?? '';
+          case 'start_date':  return a.start_date ?? '';
+          case 'days':        return a.start_date && a.end_date ? workingDays(a.start_date, a.end_date) : 0;
+          case 'daily_wage':  return a.daily_wage ?? 0;
+          case 'incentive':   return a.incentive ?? 0;
+          case 'cost':        return calcCost(a) ?? 0;
+        }
+      })();
+      const vb = (() => {
+        switch (key) {
+          case 'name':        return b.labour?.name ?? '';
+          case 'designation': return b.labour?.designation ?? '';
+          case 'notes':       return b.notes ?? '';
+          case 'start_date':  return b.start_date ?? '';
+          case 'days':        return b.start_date && b.end_date ? workingDays(b.start_date, b.end_date) : 0;
+          case 'daily_wage':  return b.daily_wage ?? 0;
+          case 'incentive':   return b.incentive ?? 0;
+          case 'cost':        return calcCost(b) ?? 0;
+        }
+      })();
+      const result = cmp(va, vb);
+      return dir === 'asc' ? result : -result;
+    });
+    return rowsCopy;
+  }, [outsourcedRowsRaw, outsourceSort]);
 
   // Filter by the labour type chosen in the dialog form, not the current table tab
   const activeLabour = labourMaster.filter(l => l.labour_type === form.labour_type);
@@ -302,13 +399,46 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Designation</TableHead>
-                      <TableHead className="w-[120px]">Bandwidth</TableHead>
-                      <TableHead className="w-[170px]">Period</TableHead>
-                      <TableHead className="w-[90px]">Days</TableHead>
-                      <TableHead className="w-[110px]">Rate/Day</TableHead>
-                      <TableHead className="w-[120px]">Est. Cost</TableHead>
+                      <TableHead>
+                        <button onClick={() => toggleInHouseSort('name')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Name <SortIcon active={inHouseSort.key === 'name'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead>
+                        <button onClick={() => toggleInHouseSort('designation')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Designation <SortIcon active={inHouseSort.key === 'designation'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="min-w-[180px]">
+                        <button onClick={() => toggleInHouseSort('notes')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Notes <SortIcon active={inHouseSort.key === 'notes'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[120px]">
+                        <button onClick={() => toggleInHouseSort('bandwidth')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Bandwidth <SortIcon active={inHouseSort.key === 'bandwidth'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[170px]">
+                        <button onClick={() => toggleInHouseSort('start_date')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Period <SortIcon active={inHouseSort.key === 'start_date'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[90px]">
+                        <button onClick={() => toggleInHouseSort('days')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Days <SortIcon active={inHouseSort.key === 'days'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[110px]">
+                        <button onClick={() => toggleInHouseSort('rate')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Rate/Day <SortIcon active={inHouseSort.key === 'rate'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[120px]">
+                        <button onClick={() => toggleInHouseSort('cost')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Est. Cost <SortIcon active={inHouseSort.key === 'cost'} dir={inHouseSort.dir} />
+                        </button>
+                      </TableHead>
                       <TableHead className="w-[100px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -322,6 +452,9 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                         <TableRow key={r.id} className="hover:bg-slate-50">
                           <TableCell className="font-medium">{r.labour?.name || '—'}</TableCell>
                           <TableCell className="text-slate-600 text-sm">{r.labour?.designation || '—'}</TableCell>
+                          <TableCell className="text-slate-600 text-sm whitespace-normal break-words" title={r.notes || ''}>
+                            {r.notes || <span className="text-slate-300">—</span>}
+                          </TableCell>
                           <TableCell>
                             <Badge className="bg-blue-100 text-blue-700">{r.bandwidth_pct ?? '—'}%</Badge>
                           </TableCell>
@@ -348,7 +481,7 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                     {/* Total row */}
                     {inHouseRows.length > 0 && (
                       <TableRow className="bg-blue-50 font-semibold border-t-2">
-                        <TableCell colSpan={6} className="text-right text-sm">Total Estimated Cost</TableCell>
+                        <TableCell colSpan={7} className="text-right text-sm">Total Estimated Cost</TableCell>
                         <TableCell className="text-blue-700 font-bold">{fmt(totalInHouseCost)}</TableCell>
                         <TableCell />
                       </TableRow>
@@ -368,13 +501,46 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Designation</TableHead>
-                      <TableHead className="w-[170px]">Period</TableHead>
-                      <TableHead className="w-[80px]">Days</TableHead>
-                      <TableHead className="w-[110px]">Daily Wage</TableHead>
-                      <TableHead className="w-[100px]">Incentive</TableHead>
-                      <TableHead className="w-[120px]">Est. Cost</TableHead>
+                      <TableHead>
+                        <button onClick={() => toggleOutsourceSort('name')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Name <SortIcon active={outsourceSort.key === 'name'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead>
+                        <button onClick={() => toggleOutsourceSort('designation')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Designation <SortIcon active={outsourceSort.key === 'designation'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="min-w-[180px]">
+                        <button onClick={() => toggleOutsourceSort('notes')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Notes <SortIcon active={outsourceSort.key === 'notes'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[170px]">
+                        <button onClick={() => toggleOutsourceSort('start_date')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Period <SortIcon active={outsourceSort.key === 'start_date'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[80px]">
+                        <button onClick={() => toggleOutsourceSort('days')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Days <SortIcon active={outsourceSort.key === 'days'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[110px]">
+                        <button onClick={() => toggleOutsourceSort('daily_wage')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Daily Wage <SortIcon active={outsourceSort.key === 'daily_wage'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[100px]">
+                        <button onClick={() => toggleOutsourceSort('incentive')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Incentive <SortIcon active={outsourceSort.key === 'incentive'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
+                      <TableHead className="w-[120px]">
+                        <button onClick={() => toggleOutsourceSort('cost')} className="inline-flex items-center gap-1 font-medium hover:text-slate-900">
+                          Est. Cost <SortIcon active={outsourceSort.key === 'cost'} dir={outsourceSort.dir} />
+                        </button>
+                      </TableHead>
                       <TableHead className="w-[100px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -386,6 +552,9 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                         <TableRow key={r.id} className="hover:bg-slate-50">
                           <TableCell className="font-medium">{r.labour?.name || '—'}</TableCell>
                           <TableCell className="text-slate-600 text-sm">{r.labour?.designation || '—'}</TableCell>
+                          <TableCell className="text-slate-600 text-sm whitespace-normal break-words" title={r.notes || ''}>
+                            {r.notes || <span className="text-slate-300">—</span>}
+                          </TableCell>
                           <TableCell className="text-sm text-slate-600">
                             {r.start_date ? new Date(r.start_date).toLocaleDateString('en-IN') : '—'} →{' '}
                             {r.end_date   ? new Date(r.end_date).toLocaleDateString('en-IN')   : '—'}
@@ -407,7 +576,7 @@ export default function ManpowerTab({ projectId }: { projectId: string }) {
                     })}
                     {outsourcedRows.length > 0 && (
                       <TableRow className="bg-amber-50 font-semibold border-t-2">
-                        <TableCell colSpan={6} className="text-right text-sm">Total Estimated Cost</TableCell>
+                        <TableCell colSpan={7} className="text-right text-sm">Total Estimated Cost</TableCell>
                         <TableCell className="text-amber-700 font-bold">{fmt(totalOutsourcedCost)}</TableCell>
                         <TableCell />
                       </TableRow>
